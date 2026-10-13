@@ -1,7 +1,7 @@
-// api/admin/add-user.js
-// Admin Endpoint: Add Participant or Admin to Roster
-import { supabase, localStore, upsertParticipantSession, persistStore } from '../_lib/db.js';
-import { requireAdmin } from '../_lib/auth.js';
+// api/_lib/admin/add-user.js
+// Admin Handler: Add Participant or Admin to Roster
+import { supabase, localStore, upsertParticipantSession, persistStore } from '../db.js';
+import { requireAdmin } from '../auth.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {

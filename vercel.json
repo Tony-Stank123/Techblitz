@@ -2,6 +2,10 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/api/admin/:action",
+      "destination": "/api/admin/[action]?action=:action"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },

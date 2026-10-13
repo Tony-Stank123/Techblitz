@@ -1,8 +1,8 @@
-// api/admin/reveal-scores.js
-// Admin Endpoint: Toggle / Trigger Public Score & Solution Reveal
-import { supabase, localStore, persistStore } from '../_lib/db.js';
-import { requireAdmin } from '../_lib/auth.js';
-import { broadcastEvent } from '../_lib/realtime.js';
+// api/_lib/admin/reveal-scores.js
+// Admin Handler: Toggle / Trigger Public Score & Solution Reveal
+import { supabase, localStore, persistStore } from '../db.js';
+import { requireAdmin } from '../auth.js';
+import { broadcastEvent } from '../realtime.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {

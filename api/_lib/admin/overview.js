@@ -1,7 +1,7 @@
-// api/admin/overview.js
-// Admin Endpoint: Full State Snapshot for Admin Dashboard
-import { supabase, localStore } from '../_lib/db.js';
-import { requireAdmin } from '../_lib/auth.js';
+// api/_lib/admin/overview.js
+// Admin Handler: Full State Snapshot for Admin Dashboard
+import { supabase, localStore } from '../db.js';
+import { requireAdmin } from '../auth.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -50,6 +50,8 @@ export default async function handler(req, res) {
         .select('id, register_number, status, exited_at')
         .eq('status', 'pending')
         .order('exited_at', { ascending: false });
+      if (reqs) requests = reqs;
+
       // 5. Cross-check verified submissions count
       const { data: correctSubs } = await supabase
         .from('submissions')

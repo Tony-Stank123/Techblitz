@@ -1,7 +1,7 @@
-// api/admin/remove-user.js
-// Admin Endpoint: Remove Student from Registered User Database
-import { supabase, localStore } from '../_lib/db.js';
-import { requireAdmin } from '../_lib/auth.js';
+// api/_lib/admin/remove-user.js
+// Admin Handler: Remove Student from Registered User Database
+import { supabase, localStore } from '../db.js';
+import { requireAdmin } from '../auth.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST' && req.method !== 'DELETE') {

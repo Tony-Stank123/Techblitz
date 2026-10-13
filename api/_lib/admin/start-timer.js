@@ -1,8 +1,8 @@
-// api/admin/start-timer.js
-// Admin Endpoint: Synchronized Timer Start Trigger
-import { supabase, localStore } from '../_lib/db.js';
-import { requireAdmin } from '../_lib/auth.js';
-import { broadcastEvent } from '../_lib/realtime.js';
+// api/_lib/admin/start-timer.js
+// Admin Handler: Synchronized Timer Start Trigger
+import { supabase, localStore } from '../db.js';
+import { requireAdmin } from '../auth.js';
+import { broadcastEvent } from '../realtime.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {

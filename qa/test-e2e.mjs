@@ -36,7 +36,18 @@ const server = createServer(async (req, res) => {
       };
 
       const relPath = p.replace(/^\/api\//, '');
-      const modulePath = join(ROOT, 'api', relPath + '.js');
+      let modulePath = join(ROOT, 'api', relPath + '.js');
+
+      if (!existsSync(modulePath)) {
+        const parts = relPath.split('/');
+        if (parts.length > 1) {
+          const dynamicPath = join(ROOT, 'api', parts[0], '[action].js');
+          if (existsSync(dynamicPath)) {
+            modulePath = dynamicPath;
+            req.query = { ...(req.query || {}), action: parts[1] };
+          }
+        }
+      }
 
       if (!existsSync(modulePath)) {
         res.status(404).json({ error: `API route not found: ${p}` });
