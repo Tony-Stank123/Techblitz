@@ -21,6 +21,7 @@ export default async function handler(req, res) {
   localStore.event_state.is_started = false;
   localStore.event_state.server_start_time = null;
   localStore.event_state.scores_revealed = false;
+  localStore.event_state.paused_elapsed_ms = null;
   localStore.submissions = [];
   localStore.fullscreen_requests = [];
 
@@ -41,53 +42,55 @@ export default async function handler(req, res) {
   // 2. Database reset (if Supabase is connected)
   if (supabase) {
     try {
-      // 1. Reset event_state across ALL rows
-      await supabase
-        .from('event_state')
-        .update({
-          is_started: false,
-          server_start_time: null,
-          scores_revealed: false,
-          updated_at: nowIso
-        })
-        .not('is_started', 'is', null);
+      await Promise.allSettled([
+        // 1. Reset event_state across ALL rows
+        supabase
+          .from('event_state')
+          .update({
+            is_started: false,
+            server_start_time: null,
+            scores_revealed: false,
+            updated_at: nowIso
+          })
+          .not('is_started', 'is', null),
 
-      // Upsert default row 1
-      await supabase
-        .from('event_state')
-        .upsert({
-          id: 1,
-          is_started: false,
-          server_start_time: null,
-          total_duration_ms: 4200000,
-          scores_revealed: false,
-          updated_at: nowIso
-        }, { onConflict: 'id' });
+        // Upsert default row 1
+        supabase
+          .from('event_state')
+          .upsert({
+            id: 1,
+            is_started: false,
+            server_start_time: null,
+            total_duration_ms: 4200000,
+            scores_revealed: false,
+            updated_at: nowIso
+          }, { onConflict: 'id' }),
 
-      // 2. Clear all recorded submissions
-      await supabase
-        .from('submissions')
-        .delete()
-        .not('puzzle_id', 'is', null);
+        // 2. Clear all recorded submissions
+        supabase
+          .from('submissions')
+          .delete()
+          .not('puzzle_id', 'is', null),
 
-      // 3. Clear all fullscreen violation requests
-      await supabase
-        .from('fullscreen_requests')
-        .delete()
-        .not('status', 'is', null);
+        // 3. Clear all fullscreen violation requests
+        supabase
+          .from('fullscreen_requests')
+          .delete()
+          .not('status', 'is', null),
 
-      // 4. Reset all participant session metrics (scores, hints, penalty, accusations)
-      await supabase
-        .from('participant_sessions')
-        .update({
-          score: 0,
-          hints_used: 0,
-          penalty_seconds: 0,
-          accusation_suspect: null,
-          is_blocked: false,
-          last_active_at: nowIso
-        })
-        .not('register_number', 'is', null);
+        // 4. Reset all participant session metrics (scores, hints, penalty, accusations)
+        supabase
+          .from('participant_sessions')
+          .update({
+            score: 0,
+            hints_used: 0,
+            penalty_seconds: 0,
+            accusation_suspect: null,
+            is_blocked: false,
+            last_active_at: nowIso
+          })
+          .not('register_number', 'is', null)
+      ]);
     } catch (dbErr) {
       console.warn('[RESET DB WARNING]', dbErr.message);
     }

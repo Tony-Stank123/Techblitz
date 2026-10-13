@@ -94,6 +94,8 @@ export default async function handler(req, res) {
   // Fallback / merge with localStore
   if (!supabase || !eStateFetched) {
     eventState = { ...localStore.event_state };
+  } else if (!eventState.is_started && localStore.event_state.paused_elapsed_ms != null) {
+    eventState.paused_elapsed_ms = localStore.event_state.paused_elapsed_ms;
   }
   if (roster.length === 0) {
     roster = [...localStore.users.values()];

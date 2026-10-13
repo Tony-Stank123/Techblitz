@@ -2,6 +2,7 @@
 // Consolidated Admin Serverless Function (Vercel Dynamic Route: 1 function instead of 6)
 import overviewHandler from '../_lib/admin/overview.js';
 import startTimerHandler from '../_lib/admin/start-timer.js';
+import pauseTimerHandler from '../_lib/admin/pause-timer.js';
 import addUserHandler from '../_lib/admin/add-user.js';
 import removeUserHandler from '../_lib/admin/remove-user.js';
 import unblockHandler from '../_lib/admin/unblock.js';
@@ -13,6 +14,10 @@ const handlers = {
   'start-timer': startTimerHandler,
   'start': startTimerHandler,
   'timer': startTimerHandler,
+  'pause-timer': pauseTimerHandler,
+  'pause': pauseTimerHandler,
+  'stop-timer': pauseTimerHandler,
+  'stop': pauseTimerHandler,
   'add-user': addUserHandler,
   'adduser': addUserHandler,
   'remove-user': removeUserHandler,

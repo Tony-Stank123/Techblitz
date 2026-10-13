@@ -1232,6 +1232,9 @@ const API = {
         if (endpoint.startsWith('/api/admin/reset')) {
           return { success: true, message: 'Event reset successfully' };
         }
+        if (endpoint.startsWith('/api/admin/pause')) {
+          return { status: 'paused', is_started: false };
+        }
         if (endpoint.startsWith('/api/admin/start')) {
           return { status: 'started', is_started: true, server_start_time: new Date().toISOString(), total_duration_ms: 4200000 };
         }
@@ -1244,7 +1247,8 @@ const API = {
               is_started: Boolean(S.eventStarted),
               server_start_time: S.serverStartTime ? new Date(S.serverStartTime).toISOString() : null,
               total_duration_ms: 4200000,
-              scores_revealed: Boolean(S.scoresRevealed)
+              scores_revealed: Boolean(S.scoresRevealed),
+              paused_elapsed_ms: S.pausedElapsedMs
             },
             leaderboard: [],
             requests: [],
@@ -1288,8 +1292,17 @@ const API = {
   reportFullscreenExit() {
     return this.request('/api/fullscreen/exit', { method: 'POST' });
   },
-  adminStartTimer() {
-    return this.request('/api/admin/start-timer', { method: 'POST' });
+  adminStartTimer(elapsed_ms = 0) {
+    return this.request('/api/admin/start-timer', {
+      method: 'POST',
+      body: JSON.stringify({ elapsed_ms })
+    });
+  },
+  adminPauseTimer(elapsed_ms = 0) {
+    return this.request('/api/admin/pause', {
+      method: 'POST',
+      body: JSON.stringify({ elapsed_ms })
+    });
   },
   adminAddUser(register_number, role) {
     return this.request('/api/admin/add-user', {
@@ -1342,6 +1355,8 @@ const S = {
   eventStarted: false,
   scoresRevealed: false,
   serverStartTime: null,
+  pausedElapsedMs: null,
+  pauseLockUntil: 0,
   clockOffset: 0,
   adminTab: 'control', // 'control' | 'scores' | 'requests'
   adminOverview: null,
@@ -1375,7 +1390,12 @@ const MIN = 60000;
 // Schedule activates once timer is started by admin or initialized in offline mode
 function windows(eventState){
   const es = eventState || S.adminOverview?.event_state;
-  const t0 = S.t0 || S.serverStartTime || (es?.server_start_time ? new Date(es.server_start_time).getTime() : null);
+  let t0 = S.t0 || S.serverStartTime || (es?.server_start_time ? new Date(es.server_start_time).getTime() : null);
+  const isStarted = Boolean(es?.is_started || S.eventStarted);
+  const pausedMs = S.pausedElapsedMs != null ? S.pausedElapsedMs : (es?.paused_elapsed_ms != null ? es.paused_elapsed_ms : null);
+  if(!isStarted && pausedMs != null){
+    t0 = now() - pausedMs;
+  }
   if(t0 == null) return null;
   let t = t0 + DATA.timing.readingMin * MIN;
   return DATA.detectives.map(d => { const w = { id:d.id, open:t, close:t + DATA.timing.sectionMin[d.id] * MIN }; t = w.close; return w; });
@@ -1383,6 +1403,8 @@ function windows(eventState){
 const win = id => (windows() || []).find(w => w.id === id);
 const isEventExpired = (eventState) => {
   const es = eventState || S.adminOverview?.event_state;
+  const isStarted = Boolean(es?.is_started || S.eventStarted);
+  if(!isStarted) return false;
   const startTime = S.t0 || S.serverStartTime || (es?.server_start_time ? new Date(es.server_start_time).getTime() : null);
   if(!startTime) return false;
   const duration = es?.total_duration_ms || 4200000;
@@ -1425,14 +1447,28 @@ function fieldCard(d, size=''){
 }
 function clockState(){
   const ws = windows(), t = now();
-  if(!ws) return { label:'Case clock', msg:'Starts when you open 01 Case briefing.' };
+  const es = S.adminOverview?.event_state;
+  const isStarted = Boolean(es?.is_started || S.eventStarted);
+  const pausedMs = S.pausedElapsedMs != null ? S.pausedElapsedMs : (es?.paused_elapsed_ms != null ? es.paused_elapsed_ms : null);
+  const isPaused = !isStarted && pausedMs != null && !isEventExpired();
+
+  if(!ws) return { label: isPaused ? 'Case clock (PAUSED)' : 'Case clock', msg: isPaused ? 'Investigation is paused at reset point.' : 'Starts when you open 01 Case briefing.' };
   if(sectionsDone()) return { label:'Case clock', msg:'All four cases are closed.' };
-  if(t < ws[0].open) return { label:'Reading time', from:S.t0, ts:ws[0].open, msg:"Cho's case opens when this ends." };
+  if(t < ws[0].open) return {
+    label: isPaused ? 'Reading time (PAUSED)' : 'Reading time',
+    from: S.t0 || (now() - (pausedMs || 0)),
+    ts: ws[0].open,
+    msg: isPaused ? 'Timer paused at reset point. Awaiting commencement.' : "Cho's case opens when this ends."
+  };
   const cur = ws.find(w => t >= w.open && t < w.close);
   if(!cur) return { label:'Case clock', msg:'All four cases are closed.' };
   const d = det(cur.id), nd = DATA.detectives[detIndex(cur.id)+1], done = chOf(cur.id).every(p => S.subs[p.id]);
-  return { label:`${d.name}'s case`, from:cur.open, ts:cur.close,
-    msg: done ? (nd ? `Submitted. ${nd.name} arrives when this ends.` : 'Submitted.') : (nd ? `Closes when this ends, and ${nd.name} arrives.` : 'Closes when this ends.') };
+  return {
+    label: isPaused ? `${d.name}'s case (PAUSED)` : `${d.name}'s case`,
+    from: cur.open,
+    ts: cur.close,
+    msg: isPaused ? 'Timer paused at reset point. Awaiting start by administrator.' : (done ? (nd ? `Submitted. ${nd.name} arrives when this ends.` : 'Submitted.') : (nd ? `Closes when this ends, and ${nd.name} arrives.` : 'Closes when this ends.'))
+  };
 }
 function timerBlock(){
   const c = clockState();
@@ -2360,12 +2396,16 @@ function renderAdminControl(es, roster = []){
   const expired = isEventExpired(es);
   const isStarted = Boolean(es.is_started || S.eventStarted);
   const isRunning = isStarted && !expired;
+  const pausedMs = S.pausedElapsedMs != null ? S.pausedElapsedMs : (es.paused_elapsed_ms != null ? es.paused_elapsed_ms : null);
+  const isPaused = !isStarted && pausedMs != null && !expired;
+  const activeDuration = es.total_duration_ms || 4200000;
+  const remainingMs = isPaused ? Math.max(0, activeDuration - pausedMs) : (es.server_start_time ? Math.max(0, new Date(es.server_start_time).getTime() + activeDuration - now()) : activeDuration);
   return `
   <div class="admin-grid">
     <div class="admin-card" id="admin-clock-card">
       <div class="mono muted">EVENT CLOCK STATUS</div>
-      <h2 class="display" id="admin-event-status-h2" style="font-size:2.4rem;margin:.5rem 0 .8rem;">${expired ? '<span style="color:var(--amber);">INVESTIGATION CONCLUDED</span>' : isRunning ? '<span style="color:var(--steel-ink);">INVESTIGATION RUNNING</span>' : '<span style="color:var(--amber);">AWAITING COMMENCEMENT</span>'}</h2>
-      ${isRunning ? `
+      <h2 class="display" id="admin-event-status-h2" style="font-size:2.4rem;margin:.5rem 0 .8rem;">${expired ? '<span style="color:var(--amber);">INVESTIGATION CONCLUDED</span>' : isRunning ? '<span style="color:var(--steel-ink);">INVESTIGATION RUNNING</span>' : isPaused ? '<span style="color:var(--amber);">INVESTIGATION PAUSED</span>' : '<span style="color:var(--amber);">AWAITING COMMENCEMENT</span>'}</h2>
+      ${(isRunning || isPaused) ? `
         <div id="admin-clock-running-box" style="background:rgba(0,0,0,.35);border:1px solid var(--line);padding:1.2rem;margin:1rem 0;border-radius:4px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:1rem;">
             <div>
@@ -2376,8 +2416,8 @@ function renderAdminControl(es, roster = []){
             </div>
             <div>
               <div class="mono muted" style="font-size:.78rem;letter-spacing:.05em;">TOTAL EVENT REMAINING</div>
-              <div class="display cd" data-live-total data-until="${(es.server_start_time ? new Date(es.server_start_time).getTime() + (es.total_duration_ms || 4200000) : 0)}" style="font-size:2.2rem;color:var(--paper);line-height:1.1;margin-top:.2rem;">
-                ${es.server_start_time ? fmtMs(new Date(es.server_start_time).getTime() + (es.total_duration_ms || 4200000) - now()) : '--:--'}
+              <div class="display cd" data-live-total data-until="${isPaused ? 0 : (es.server_start_time ? new Date(es.server_start_time).getTime() + activeDuration : 0)}" style="font-size:2.2rem;color:var(--paper);line-height:1.1;margin-top:.2rem;">
+                ${fmtMs(remainingMs)}
               </div>
             </div>
           </div>
@@ -2390,8 +2430,10 @@ function renderAdminControl(es, roster = []){
       <p id="admin-clock-desc" style="color:var(--slate);font-size:.9rem;line-height:1.6;margin-top:.8rem;">
         ${isRunning
           ? `Authoritative start timestamp: <strong class="mono" style="color:var(--paper);">${clock(es.server_start_time || S.serverStartTime)}</strong><br>Timer is synchronized across all participants.`
+          : isPaused
+          ? `Timer is paused at reset point (<strong class="mono" style="color:var(--amber);">${fmtMs(pausedMs)}</strong> elapsed, <strong class="mono" style="color:var(--paper);">${fmtMs(remainingMs)}</strong> remaining). Click <strong>START TIMER FOR ALL PARTICIPANTS</strong> to resume countdown across all participant terminals.`
           : expired
-          ? `The investigation has concluded. All 70 minutes have elapsed across participant terminals. Click <strong>RESTART TIMER</strong> to initiate a new session, or <strong>RESET ENTIRE EVENT</strong> to clear scores.`
+          ? `The investigation has concluded. All 70 minutes have elapsed across participant terminals. Click <strong>START TIMER</strong> to initiate a new session, or <strong>RESET ENTIRE EVENT</strong> to clear scores.`
           : `Clicking Start Timer will immediately engage fullscreen mode and unlock case briefing across all 50 participant screens simultaneously.`}
       </p>
       <div style="margin-top:1.6rem;display:flex;flex-direction:column;gap:.8rem;">
@@ -2619,6 +2661,11 @@ function updateAdminLiveElements(ov){
   const expired = isEventExpired(es);
   const isStarted = Boolean(es.is_started || S.eventStarted);
   const isRunning = isStarted && !expired;
+  const pausedMs = S.pausedElapsedMs != null ? S.pausedElapsedMs : (es.paused_elapsed_ms != null ? es.paused_elapsed_ms : null);
+  const isPaused = !isStarted && pausedMs != null && !expired;
+  const activeDuration = es.total_duration_ms || 4200000;
+  const remainingMs = isPaused ? Math.max(0, activeDuration - pausedMs) : (es.server_start_time ? Math.max(0, new Date(es.server_start_time).getTime() + activeDuration - now()) : activeDuration);
+
   const startBtn = document.getElementById('admin-start-timer-btn');
   if(startBtn){
     startBtn.disabled = false;
@@ -2628,20 +2675,22 @@ function updateAdminLiveElements(ov){
   // 6. Header Status
   const statusH2 = document.getElementById('admin-event-status-h2');
   if(statusH2){
-    statusH2.innerHTML = expired ? '<span style="color:var(--amber);">INVESTIGATION CONCLUDED</span>' : isRunning ? '<span style="color:var(--steel-ink);">INVESTIGATION RUNNING</span>' : '<span style="color:var(--amber);">AWAITING COMMENCEMENT</span>';
+    statusH2.innerHTML = expired ? '<span style="color:var(--amber);">INVESTIGATION CONCLUDED</span>' : isRunning ? '<span style="color:var(--steel-ink);">INVESTIGATION RUNNING</span>' : isPaused ? '<span style="color:var(--amber);">INVESTIGATION PAUSED</span>' : '<span style="color:var(--amber);">AWAITING COMMENCEMENT</span>';
   }
 
   // 7. Clock Running Box & Desc
   const clockBox = document.getElementById('admin-clock-running-box');
   if(clockBox){
-    clockBox.style.display = isRunning ? '' : 'none';
+    clockBox.style.display = (isRunning || isPaused) ? '' : 'none';
   }
   const clockDesc = document.getElementById('admin-clock-desc');
   if(clockDesc){
     clockDesc.innerHTML = isRunning
       ? `Authoritative start timestamp: <strong class="mono" style="color:var(--paper);">${clock(es.server_start_time || S.serverStartTime)}</strong><br>Timer is synchronized across all participants.`
+      : isPaused
+      ? `Timer is paused at reset point (<strong class="mono" style="color:var(--amber);">${fmtMs(pausedMs)}</strong> elapsed, <strong class="mono" style="color:var(--paper);">${fmtMs(remainingMs)}</strong> remaining). Click <strong>START TIMER FOR ALL PARTICIPANTS</strong> to resume countdown across all participant terminals.`
       : expired
-      ? `The investigation has concluded. All 70 minutes have elapsed across participant terminals. Click <strong>RESTART TIMER</strong> to initiate a new session, or <strong>RESET ENTIRE EVENT</strong> to clear scores.`
+      ? `The investigation has concluded. All 70 minutes have elapsed across participant terminals. Click <strong>START TIMER</strong> to initiate a new session, or <strong>RESET ENTIRE EVENT</strong> to clear scores.`
       : `Clicking Start Timer will immediately engage fullscreen mode and unlock case briefing across all 50 participant screens simultaneously.`;
   }
 }
@@ -2764,11 +2813,14 @@ function bindAdmin(){
     S.eventStarted = false;
     S.serverStartTime = null;
     S.t0 = null;
+    S.pausedElapsedMs = null;
+    S.pauseLockUntil = Date.now() + 5000;
     S.scoresRevealed = false;
     if (S.adminOverview) {
       S.adminOverview.event_state = {
         is_started: false,
         server_start_time: null,
+        paused_elapsed_ms: null,
         total_duration_ms: 4200000,
         scores_revealed: false
       };
@@ -2792,6 +2844,7 @@ function bindAdmin(){
         if (ov.event_state) {
           ov.event_state.is_started = false;
           ov.event_state.server_start_time = null;
+          ov.event_state.paused_elapsed_ms = null;
           ov.event_state.scores_revealed = false;
         }
         S.adminOverview = ov;
@@ -2829,60 +2882,65 @@ function bindAdmin(){
     render();
   });
 
-  $('#admin-start-timer-btn')?.addEventListener('click', async e => {
+  $('#admin-start-timer-btn')?.addEventListener('click', async () => {
     const isRunning = Boolean((S.adminOverview?.event_state?.is_started || S.eventStarted) && !isEventExpired());
     if (isRunning) {
-      if (!confirm('⚠️ RESET TIMER FOR ALL PARTICIPANTS?\n\nThis will stop the active clock and reset the timer back to Start Timer across all participant terminals.\n\nAre you sure you want to proceed?')) return;
-      const btn = e.target;
-      btn.disabled = true;
-      btn.textContent = 'RESETTING TIMER...';
+      // 1. Instantly pause timer locally in 0ms (instant toggle, zero lag)
+      const curStart = S.serverStartTime || S.t0 || (S.adminOverview?.event_state?.server_start_time ? new Date(S.adminOverview.event_state.server_start_time).getTime() : now());
+      const elapsed = Math.max(0, now() - curStart);
 
-      // 1. Immediately reset client state so button flips back to 'START TIMER'
+      S.pausedElapsedMs = elapsed;
       S.eventStarted = false;
-      S.serverStartTime = null;
-      S.t0 = null;
+      S.pauseLockUntil = Date.now() + 5000;
       if (S.adminOverview?.event_state) {
         S.adminOverview.event_state.is_started = false;
-        S.adminOverview.event_state.server_start_time = null;
+        S.adminOverview.event_state.paused_elapsed_ms = elapsed;
       }
       render();
 
       try {
-        await API.adminResetEvent();
+        await API.adminPauseTimer(elapsed);
         const ov = await API.adminOverview().catch(() => null);
-        if (ov) {
-          if (ov.event_state) {
-            ov.event_state.is_started = false;
-            ov.event_state.server_start_time = null;
-          }
+        if (ov && ov.event_state) {
+          ov.event_state.is_started = false;
+          ov.event_state.paused_elapsed_ms = elapsed;
           S.adminOverview = ov;
         }
         render();
       } catch (err) {
-        alert('Timer reset locally. Server notice: ' + err.message);
-        render();
+        console.warn('Timer pause warning:', err);
       }
     } else {
-      if (!confirm('Start case timer for all participants now? This will simultaneously initiate the countdown and enforce fullscreen.')) return;
-      const btn = e.target;
-      btn.disabled = true;
-      btn.textContent = 'STARTING TIMER...';
+      // 2. Resume / start timer from paused elapsed time in 0ms
+      const elapsed = S.pausedElapsedMs != null ? S.pausedElapsedMs : (S.adminOverview?.event_state?.paused_elapsed_ms || 0);
+      const resumedStart = now() - elapsed;
+
+      S.eventStarted = true;
+      S.serverStartTime = resumedStart;
+      S.t0 = resumedStart;
+      S.pausedElapsedMs = null;
+      S.pauseLockUntil = Date.now() + 5000;
+      if (S.adminOverview?.event_state) {
+        S.adminOverview.event_state.is_started = true;
+        S.adminOverview.event_state.server_start_time = new Date(resumedStart).toISOString();
+        S.adminOverview.event_state.paused_elapsed_ms = null;
+      }
+      render();
+
       try {
-        const res = await API.adminStartTimer();
-        S.eventStarted = true;
-        S.serverStartTime = new Date(res.server_start_time).getTime();
-        S.t0 = S.serverStartTime;
-        if (S.adminOverview?.event_state) {
-          S.adminOverview.event_state.is_started = true;
-          S.adminOverview.event_state.server_start_time = res.server_start_time;
-          S.adminOverview.event_state.total_duration_ms = res.total_duration_ms || 4200000;
+        const res = await API.adminStartTimer(elapsed);
+        if (res?.server_start_time) {
+          S.serverStartTime = new Date(res.server_start_time).getTime();
+          S.t0 = S.serverStartTime;
+          if (S.adminOverview?.event_state) {
+            S.adminOverview.event_state.server_start_time = res.server_start_time;
+          }
         }
         const ov = await API.adminOverview().catch(() => null);
         if (ov) S.adminOverview = ov;
         render();
       } catch (err) {
         alert('Error starting timer: ' + err.message);
-        btn.disabled = false;
         render();
       }
     }
@@ -3109,22 +3167,32 @@ async function initSession(){
             S.eventStarted = true;
             S.serverStartTime = ov.event_state.server_start_time ? new Date(ov.event_state.server_start_time).getTime() : null;
             S.t0 = S.serverStartTime;
+            S.pausedElapsedMs = null;
           } else {
             S.eventStarted = false;
-            S.serverStartTime = null;
-            S.t0 = null;
+            S.pausedElapsedMs = ov.event_state?.paused_elapsed_ms != null ? ov.event_state.paused_elapsed_ms : null;
+            if (S.pausedElapsedMs == null) {
+              S.serverStartTime = null;
+              S.t0 = null;
+            }
           }
           if(typeof ov.event_state?.scores_revealed === 'boolean'){
             S.scoresRevealed = ov.event_state.scores_revealed;
           }
         }
-      } else if(data.event_state && data.event_state.is_started){
-        S.eventStarted = true;
-        S.serverStartTime = new Date(data.event_state.server_start_time).getTime();
-        S.t0 = S.serverStartTime;
-        if(!document.fullscreenElement && !data.is_blocked){
-          const modal = $('#fs-entry');
-          if(modal) modal.hidden = false;
+      } else if(data.event_state){
+        if(data.event_state.is_started){
+          S.eventStarted = true;
+          S.serverStartTime = new Date(data.event_state.server_start_time).getTime();
+          S.t0 = S.serverStartTime;
+          S.pausedElapsedMs = null;
+          if(!document.fullscreenElement && !data.is_blocked){
+            const modal = $('#fs-entry');
+            if(modal) modal.hidden = false;
+          }
+        } else if(data.event_state.paused_elapsed_ms != null){
+          S.eventStarted = false;
+          S.pausedElapsedMs = data.event_state.paused_elapsed_ms;
         }
       }
     } else {
@@ -3146,14 +3214,20 @@ function initRealtime(){
         const ov = await API.adminOverview();
         if(ov){
           S.adminOverview = ov;
-          if(ov.event_state?.is_started){
-            S.eventStarted = true;
-            S.serverStartTime = ov.event_state.server_start_time ? new Date(ov.event_state.server_start_time).getTime() : null;
-            S.t0 = S.serverStartTime;
-          } else {
-            S.eventStarted = false;
-            S.serverStartTime = null;
-            S.t0 = null;
+          if(!S.pauseLockUntil || Date.now() >= S.pauseLockUntil){
+            if(ov.event_state?.is_started){
+              S.eventStarted = true;
+              S.serverStartTime = ov.event_state.server_start_time ? new Date(ov.event_state.server_start_time).getTime() : null;
+              S.t0 = S.serverStartTime;
+              S.pausedElapsedMs = null;
+            } else {
+              S.eventStarted = false;
+              S.pausedElapsedMs = ov.event_state?.paused_elapsed_ms != null ? ov.event_state.paused_elapsed_ms : null;
+              if (S.pausedElapsedMs == null) {
+                S.serverStartTime = null;
+                S.t0 = null;
+              }
+            }
           }
           if(typeof ov.event_state?.scores_revealed === 'boolean'){
             S.scoresRevealed = ov.event_state.scores_revealed;
@@ -3169,29 +3243,40 @@ function initRealtime(){
       } else if(S.user.role === 'participant'){
         const sess = await API.getSession();
         if(sess){
-          if(sess.event_state?.is_started && !S.eventStarted){
-            handleTimerStarted(sess.event_state.server_start_time);
-          } else if((!sess.event_state || !sess.event_state.is_started) && (S.eventStarted || Object.keys(S.subs).length > 0 || S.accusation)){
-            S.eventStarted = false;
-            S.serverStartTime = null;
-            S.t0 = null;
-            S.scoresRevealed = false;
-            S.subs = {};
-            S.hints = {};
-            S.accusation = null;
-            S.score = 0;
-            S.opened = {};
-            S.pending = {};
-            S.pendingTime = {};
-            S.isBlocked = false;
-            const blocker = $('#fs-blocker');
-            if(blocker) blocker.classList.remove('active');
-            const entryModal = $('#fs-entry');
-            if(entryModal) entryModal.hidden = true;
-            if(location.hash !== '#/' && !location.hash.startsWith('#/briefing')){
-              location.hash = '#/';
-            } else {
-              render();
+          if(sess.event_state?.is_started){
+            if(!S.eventStarted){
+              handleTimerStarted(sess.event_state.server_start_time);
+            }
+            S.pausedElapsedMs = null;
+          } else if(!sess.event_state?.is_started){
+            const isPaused = sess.event_state?.paused_elapsed_ms != null;
+            if(isPaused){
+              S.eventStarted = false;
+              S.pausedElapsedMs = sess.event_state.paused_elapsed_ms;
+            } else if((!sess.event_state || (!sess.event_state.server_start_time && !sess.event_state.paused_elapsed_ms)) && (S.eventStarted || Object.keys(S.subs).length > 0 || S.accusation)){
+              // Full event reset triggered by admin
+              S.eventStarted = false;
+              S.serverStartTime = null;
+              S.t0 = null;
+              S.pausedElapsedMs = null;
+              S.scoresRevealed = false;
+              S.subs = {};
+              S.hints = {};
+              S.accusation = null;
+              S.score = 0;
+              S.opened = {};
+              S.pending = {};
+              S.pendingTime = {};
+              S.isBlocked = false;
+              const blocker = $('#fs-blocker');
+              if(blocker) blocker.classList.remove('active');
+              const entryModal = $('#fs-entry');
+              if(entryModal) entryModal.hidden = true;
+              if(location.hash !== '#/' && !location.hash.startsWith('#/briefing')){
+                location.hash = '#/';
+              } else {
+                render();
+              }
             }
           }
           if(typeof sess.event_state?.scores_revealed === 'boolean'){
@@ -3359,8 +3444,14 @@ setInterval(() => {
     el.textContent = curClock.msg;
   });
   document.querySelectorAll('[data-live-total]').forEach(el => {
-    if(S.t0 != null){
-      const totalEnd = S.t0 + 4200000;
+    const totalDuration = 4200000;
+    const es = S.adminOverview?.event_state;
+    const isStarted = Boolean(es?.is_started || S.eventStarted);
+    const pausedMs = S.pausedElapsedMs != null ? S.pausedElapsedMs : (es?.paused_elapsed_ms != null ? es.paused_elapsed_ms : null);
+    if(!isStarted && pausedMs != null){
+      el.textContent = fmtMs(Math.max(0, totalDuration - pausedMs));
+    } else if(S.t0 != null){
+      const totalEnd = S.t0 + totalDuration;
       el.dataset.until = totalEnd;
       el.textContent = fmtMs(totalEnd - curNow);
     }

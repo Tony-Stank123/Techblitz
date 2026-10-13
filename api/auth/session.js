@@ -73,6 +73,8 @@ export default async function handler(req, res) {
   // Fallback to localStore
   if (!supabase || !eStateFetched) {
     eventState = { ...localStore.event_state };
+  } else if (!eventState.is_started && localStore.event_state.paused_elapsed_ms != null) {
+    eventState.paused_elapsed_ms = localStore.event_state.paused_elapsed_ms;
   }
   if (user.role === 'participant') {
     const localSess = getParticipantSession(user.register_number);
