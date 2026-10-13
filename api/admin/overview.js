@@ -13,7 +13,7 @@ export default async function handler(req, res) {
     return res.status(auth.status).json({ error: auth.error });
   }
 
-  let eventState = { is_started: false, server_start_time: null, total_duration_ms: 4200000 };
+  let eventState = { is_started: false, server_start_time: null, total_duration_ms: 4200000, scores_revealed: false };
   let leaderboard = [];
   let requests = [];
   let roster = [];
@@ -50,7 +50,25 @@ export default async function handler(req, res) {
         .select('id, register_number, status, exited_at')
         .eq('status', 'pending')
         .order('exited_at', { ascending: false });
-      if (reqs) requests = reqs;
+      // 5. Cross-check verified submissions count
+      const { data: correctSubs } = await supabase
+        .from('submissions')
+        .select('register_number')
+        .eq('is_correct', true);
+
+      if (correctSubs && correctSubs.length > 0) {
+        const counts = {};
+        for (const sub of correctSubs) {
+          const k = sub.register_number.toLowerCase();
+          counts[k] = (counts[k] || 0) + 1;
+        }
+        for (const b of leaderboard) {
+          const k = b.register_number.toLowerCase();
+          if (counts[k] && counts[k] > (b.score || 0)) {
+            b.score = counts[k];
+          }
+        }
+      }
     } catch (err) {
       console.warn('[Admin Overview Supabase Warning]', err.message);
     }
@@ -60,6 +78,7 @@ export default async function handler(req, res) {
   if (!eventState.server_start_time && localStore.event_state.is_started) {
     eventState = localStore.event_state;
   }
+  eventState.scores_revealed = Boolean(eventState.scores_revealed || localStore.event_state?.scores_revealed);
   if (roster.length === 0) {
     roster = [...localStore.users.values()];
   }
@@ -82,6 +101,22 @@ export default async function handler(req, res) {
     } else if ((s.score || 0) > (existing.score || 0)) {
       existing.score = s.score;
       existing.last_active_at = s.last_active_at || existing.last_active_at;
+    }
+  }
+
+  // Cross-verify with verified submissions in localStore
+  for (const sub of localStore.submissions) {
+    if (sub.is_correct) {
+      const key = sub.register_number.toLowerCase();
+      const existing = boardMap.get(key);
+      if (existing) {
+        const count = localStore.submissions.filter(
+          x => x.register_number.toLowerCase() === key && x.is_correct
+        ).length;
+        if (count > (existing.score || 0)) {
+          existing.score = count;
+        }
+      }
     }
   }
 

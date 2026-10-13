@@ -753,7 +753,7 @@ const DATA = {
     { id:'lisbon', name:'Lisbon', line:'Runs the team. Signs off on the case.', portrait:'lisbon', away:"Lisbon is holding the scene until her team reports back." }
   ],
   // Case clock. Each case opens when the previous one's time ends (not when it's submitted).
-  timing: { readingMin:IS_FILE ? 5 : 0, sectionMin:{ cho:15, rigsby:15, 'van-pelt':20, lisbon:20 }, closeOnTimeout:true },
+  timing: { readingMin:IS_FILE ? 5 : 0, sectionMin:{ cho:15, rigsby:15, 'van-pelt':15, lisbon:20 }, closeOnTimeout:true },
   consultant: { name:'Patrick Jane', role:'Consultant to the CBI. This is you.', portrait:'jane' },
   categories: ['Timeline record','Physical evidence','Technical analysis','Witness statement','Written message','Access log','Cross-reference'],
   evidence: [
@@ -1284,6 +1284,12 @@ const API = {
       method: 'POST',
       body: JSON.stringify({ register_number })
     });
+  },
+  adminRevealScores(revealed = true) {
+    return this.request('/api/admin/reveal-scores', {
+      method: 'POST',
+      body: JSON.stringify({ revealed })
+    });
   }
 };
 
@@ -1294,6 +1300,7 @@ const S = {
   isBlocked: false,
   unblocking: false,
   eventStarted: false,
+  scoresRevealed: false,
   serverStartTime: null,
   clockOffset: 0,
   adminTab: 'control', // 'control' | 'scores' | 'requests'
@@ -1308,7 +1315,7 @@ const S = {
   sending:null, err:null,
   pick:null, accusation:null, pendingTime:{},
   t0:null,      // case clock start: set authoritatively when timer starts
-  skew:0,       // prototype time-travel offset
+  skew:0,       // offline test offset
   seen:{}       // which case-file steps have been opened
 };
 const HINT_DELAY_MS = 5 * 60 * 1000;
@@ -1332,11 +1339,21 @@ function windows(){
   return DATA.detectives.map(d => { const w = { id:d.id, open:t, close:t + DATA.timing.sectionMin[d.id] * MIN }; t = w.close; return w; });
 }
 const win = id => (windows() || []).find(w => w.id === id);
+const isEventExpired = () => {
+  if(S.t0 == null) return false;
+  const ws = windows();
+  const lastWin = ws && ws.length ? ws[ws.length - 1] : null;
+  if(lastWin) return now() >= lastWin.close;
+  return false;
+};
+const areScoresRevealed = () => {
+  return Boolean(S.scoresRevealed || S.adminOverview?.event_state?.scores_revealed || isEventExpired());
+};
 const detUnlocked = id => { const w = win(id); return !!w && now() >= w.open; };
-const detClosed = id => { const w = win(id); return !!w && DATA.timing.closeOnTimeout && now() >= w.close; };
+const detClosed = id => { const w = win(id); return !!w && (isEventExpired() || (DATA.timing.closeOnTimeout && now() >= w.close)); };
 const detDone = id => chOf(id).every(p => S.subs[p.id]) || detClosed(id);
-const sectionsDone = () => DATA.detectives.every(d => detDone(d.id));
-const pstatus = p => S.subs[p.id] ? 'submitted' : !detUnlocked(detOf(p)) ? 'away' : detClosed(detOf(p)) ? 'expired' : (p.requires && !S.subs[p.requires]) ? 'locked' : 'available';
+const sectionsDone = () => isEventExpired() || DATA.detectives.every(d => detDone(d.id));
+const pstatus = p => S.subs[p.id] ? 'submitted' : isEventExpired() ? 'expired' : !detUnlocked(detOf(p)) ? 'away' : detClosed(detOf(p)) ? 'expired' : (p.requires && !S.subs[p.requires]) ? 'locked' : 'available';
 const fmtMs = ms => { const x = Math.max(0, Math.ceil(ms / 1000)); return pad(Math.floor(x / 60)) + ':' + pad(x % 60); };
 const until = ts => `<span class="cd" data-until="${ts}">${fmtMs(ts - now())}</span>`;
 const hhmm = ts => new Date(ts).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
@@ -1377,9 +1394,9 @@ function clockState(){
 }
 function timerBlock(){
   const c = clockState();
-  return `<div class="timer" role="timer" aria-label="${esc(c.label)}"><span class="mono muted">${c.label}</span>
-    ${c.ts ? `<div class="clock">${until(c.ts)}</div><div class="meter"><i data-meter-from="${c.from}" data-meter-to="${c.ts}" style="width:${Math.max(0,(c.ts-now())/(c.ts-c.from)*100)}%"></i></div>` : ''}
-    <p class="tb-msg">${c.msg}</p></div>`;
+  return `<div class="timer" role="timer" aria-label="${esc(c.label)}"><span class="mono muted" data-live-phase-label>${c.label}</span>
+    ${c.ts ? `<div class="clock"><span class="cd" data-live-phase data-until="${c.ts}">${fmtMs(c.ts - now())}</span></div><div class="meter"><i data-meter-from="${c.from}" data-meter-to="${c.ts}" style="width:${Math.max(0,(c.ts-now())/(c.ts-c.from)*100)}%"></i></div>` : ''}
+    <p class="tb-msg" data-live-phase-msg>${c.msg}</p></div>`;
 }
 function readingBanner(){
   const ws = windows(); if(!ws) return '';
@@ -1388,11 +1405,12 @@ function readingBanner(){
   return '';
 }
 function verdictPanel(){
+  const expired = isEventExpired();
   return `<section class="verdict" aria-labelledby="vd-h">
-    <div class="mono vd-tag">All four cases closed</div>
-    <h2 id="vd-h" class="display">The snow hasn't settled.</h2>
-    <p>Four case files are on Lisbon's desk, and one name is still standing. The verdict isn't out yet. It comes at the reveal.</p>
-    ${S.accusation ? `<a class="btn" href="#/results">View case summary</a>` : `<a class="btn btn-red" href="#/final-deduction">Make your accusation</a>`}
+    <div class="mono vd-tag">${expired ? 'Time limit expired &mdash; Case concluded' : 'All four cases closed'}</div>
+    <h2 id="vd-h" class="display">${expired ? 'Investigation Concluded' : "The snow hasn't settled."}</h2>
+    <p>${expired ? "The event time limit has ended after Lisbon's case. The quiz is now concluded." : "Four case files are on Lisbon's desk, and one name is still standing. The verdict isn't out yet. It comes at the reveal."}</p>
+    ${(S.accusation || expired) ? `<a class="btn btn-red" href="#/results">View case summary &amp; scores</a>` : `<a class="btn btn-red" href="#/final-deduction">Make your accusation</a>`}
   </section>`;
 }
 const clock = iso => new Date(iso).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
@@ -1421,6 +1439,7 @@ function landing(){
     <a class="wordmark" href="#/">TECH <i>/</i> BLITZ</a>
     <nav aria-label="Primary">
       ${S.user?.role === 'admin' ? `<a href="#/admin" style="color:var(--amber);font-weight:600;">[ADMIN CONSOLE]</a>` : ''}
+      ${(S.eventStarted || S.t0 != null) && clockState().ts ? `<span class="badge mono" style="background:rgba(217,143,44,.15);color:var(--amber);border:1px solid var(--amber);font-size:.82rem;padding:.2rem .6rem;">&#x23f1; <span data-live-phase-label>${clockState().label}</span>: <strong class="cd" data-live-phase data-until="${clockState().ts}">${fmtMs(clockState().ts - now())}</strong></span>` : ''}
       <a href="#/briefing">Case file</a><a href="#/investigation">Investigation</a><a href="#/evidence">Evidence</a>
       <span class="mono muted" style="margin-left:.6rem;">${esc(S.user?.register_number || '')}</span>
       <button id="topbar-logout-btn" class="link mono muted" style="background:none;border:none;cursor:pointer;">LOGOUT</button>
@@ -1476,7 +1495,7 @@ function landing(){
       </div>
     </section>
   </main>
-  <footer class="foot"><span class="wordmark" style="font-size:1.2rem">TECH <i>/</i> BLITZ</span><span>${e.subtitle}. Frontend prototype. Content is provisional.</span></footer>`;
+  <footer class="foot"><span class="wordmark" style="font-size:1.2rem">TECH <i>/</i> BLITZ</span><span>${e.subtitle}. Official CBI Incident Platform.</span></footer>`;
 }
 
 /* ============ APP SHELL ============ */
@@ -1486,7 +1505,7 @@ function shell(active, content){
   const link = (href, label, key, extra='') => `<a href="${href}" ${active===key?'aria-current="page"':''}>${label}${extra}</a>`;
   return `
   <div class="mobile-bar"><a class="wordmark" href="#/">TECH <i>/</i> BLITZ</a>
-    ${clockState().ts ? `<span class="mono">${until(clockState().ts)}</span>` : ''}
+    ${clockState().ts ? `<span class="mono"><span class="cd" data-live-phase data-until="${clockState().ts}">${fmtMs(clockState().ts - now())}</span></span>` : ''}
     <button id="menu-btn" aria-expanded="false" aria-controls="side">Menu</button></div>
   <div class="shell">
     <aside class="side" id="side" aria-label="Investigation navigation">
@@ -1517,8 +1536,6 @@ function shell(active, content){
         </div>
         ${S.user?.role === 'admin' ? `<a href="#/admin" class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:.6rem;font-size:.75rem;min-height:36px;color:var(--amber);border-color:var(--amber);">&#x2699; ADMIN CONSOLE</a>` : ''}
       </div>
-      <div class="proto-ctl"><span class="proto-note">Prototype: time controls</span>
-        <div class="seg" role="group" aria-label="Skip time"><button data-skew="60000">+1 min</button><button data-skew="next">Next phase</button></div></div>
     </aside>
     <main class="main" id="main" tabindex="-1">${content}</main>
   </div>`;
@@ -1534,7 +1551,7 @@ function dashboard(){
     <div class="crumbs mono">Step ${stepNo('dash')} of 06</div>
     <h1>Investigation in progress</h1>
     <p>Four detectives. Four alibis to test. One truth buried beneath the snow.</p></div>
-    <span class="proto-note">Answers lock when you submit. Results stay sealed until the reveal.</span>
+    <span class="mono muted" style="font-size:.82rem;padding:.3rem .6rem;border:1px solid var(--line);background:rgba(255,255,255,.02);">Answers lock when you submit. Results stay sealed until the reveal.</span>
   </div>
   ${sectionsDone() ? verdictPanel() : ''}
   <dl class="stats">
@@ -2099,6 +2116,10 @@ function deduction(){
       <p>You named ${sus(S.accusation.suspect).name}. This is final. The solution is revealed after submissions close.</p></div></div>
       <div class="actions"><a class="btn" href="#/results">View case summary</a></div>`);
   }
+  if(isEventExpired()){
+    return shell('fd', head + `<div class="feedback fb-locked fb-neutral" role="status"><span class="glyph" aria-hidden="true">⌀</span><div><h3>Time Limit Expired</h3><p>The final 20 minutes with Lisbon have concluded. All cases and submissions are closed.</p></div></div>
+      <div class="actions" style="margin-top:1.6rem;"><a class="btn btn-red" href="#/results">View case summary &amp; scores</a></div>`);
+  }
   if(!sectionsDone()){
     return shell('fd', head + `<div class="feedback fb-locked fb-neutral" role="status"><span class="glyph" aria-hidden="true">⌀</span><div><h3>Opens once all four cases are closed</h3><p>A case closes when both parts are submitted or its time runs out. ${completed()} of ${PUZZLES.length} answers recorded so far.</p></div></div>
       <ul class="rows" style="margin-top:1.6rem">${PUZZLES.map(p => crow(p, true)).join('')}</ul>`);
@@ -2140,22 +2161,40 @@ function bindDeduction(){
 /* ============ RESULTS ============ */
 function results(){
   const a = S.accusation, hints = Object.keys(S.hints).length;
+  const revealed = areScoresRevealed();
+  const killer = sus('sam')?.name || 'Dr. Sam Whitley';
+  const accusedName = a ? (sus(a.suspect)?.name || a.suspect) : null;
+  const isAccusationRight = a?.suspect === 'sam';
+
   return shell('res', `
   <div class="closed halftone-light">
     <div class="mono muted">${DATA.event.caseId} / ${DATA.event.caseTitle}</div>
-    <h1 class="display" style="margin-top:.8rem">${a ? 'The CBI Chief is reading your file.' : 'Investigation summary'}</h1>
-    <p style="margin-top:1.2rem;color:#C9C7C1">${a ? 'Your answers and accusation are recorded. Results are announced at the reveal.' : 'Your recorded answers so far. Nothing here shows whether an answer is right.'}</p>
-    ${a ? '<span class="stampbig" aria-hidden="true">Filed</span>' : ''}
+    <h1 class="display" style="margin-top:.8rem">${revealed ? 'Investigation Concluded &mdash; Scores Revealed' : a ? 'The CBI Chief is reading your file.' : 'Investigation summary'}</h1>
+    <p style="margin-top:1.2rem;color:#C9C7C1">${revealed ? 'Official event results and case solutions have been unsealed.' : a ? 'Your answers and accusation are recorded. Results are announced at the reveal.' : 'Your recorded answers so far. Nothing here shows whether an answer is right.'}</p>
+    ${revealed ? '<span class="stampbig" style="color:var(--amber);border-color:var(--amber);" aria-hidden="true">Revealed</span>' : a ? '<span class="stampbig" aria-hidden="true">Filed</span>' : ''}
   </div>
   <h2 class="display" style="font-size:2.4rem">Puzzles</h2>
   <div class="ticks">${PUZZLES.map(p => `<div class="tick ${S.subs[p.id]?'done':''}"><div class="k">${pad(idx(p))}</div><div class="mono muted" style="font-size:.72rem">${det(detOf(p)).name}, ${p.title}</div>${statusChip(pstatus(p))}${S.subs[p.id] ? `<div class="mono muted" style="font-size:.7rem;margin-top:.3rem">${clock(S.subs[p.id].recorded_at)}</div>` : ''}</div>`).join('')}</div>
   <div class="res-grid">
     <div><h2 class="display" style="font-size:2rem;margin-bottom:.8rem">Your submission</h2>
-      <dl class="kv" style="margin:0"><dt>Accused</dt><dd>${a ? sus(a.suspect).name : '<span class="muted">Not submitted</span>'}</dd>
+      <dl class="kv" style="margin:0"><dt>Accused</dt><dd>${accusedName ? esc(accusedName) : '<span class="muted">Not submitted</span>'}</dd>
       <dt>Answers recorded</dt><dd>${completed()} of ${PUZZLES.length}</dd>
       <dt>Hints used</dt><dd>${hints}</dd></dl></div>
-    <div class="res-sealed">${motif('results')}<h2 class="display" style="font-size:2rem;margin-bottom:.8rem">Results</h2>
-      <p class="muted">Scores and the solution stay sealed until the organizers close submissions and run the reveal.</p></div>
+    ${revealed ? `
+      <div class="res-sealed" style="border-color:var(--amber);background:rgba(217,143,44,.05);">${motif('results')}
+        <div class="mono" style="color:var(--amber);font-size:.8rem;margin-bottom:.4rem;">OFFICIAL VERDICT &amp; SCORE</div>
+        <h2 class="display" style="font-size:2.4rem;color:var(--amber);margin-bottom:.6rem;">
+          FINAL SCORE: ${S.score || completed()} / ${PUZZLES.length}
+        </h2>
+        <div style="font-size:.9rem;line-height:1.6;color:var(--paper);">
+          <p><strong>The Real Culprit:</strong> <span style="color:var(--amber);">${killer}</span></p>
+          <p><strong>Your Accusation:</strong> ${a ? (isAccusationRight ? '<span style="color:#4caf50;">&#x2713; SOLVED &mdash; Killer apprehended!</span>' : '<span style="color:var(--red);">&#x2717; MISIDENTIFIED</span>') : '<span class="muted">None made</span>'}</p>
+        </div>
+      </div>
+    ` : `
+      <div class="res-sealed">${motif('results')}<h2 class="display" style="font-size:2rem;margin-bottom:.8rem">Results</h2>
+        <p class="muted">Scores and the solution stay sealed until the organizers close submissions and run the reveal.</p></div>
+    `}
   </div>
   <div class="actions" style="margin-top:2rem"><a class="btn btn-ghost" href="#/investigation">Back to the investigation</a></div>`);
 }
@@ -2247,6 +2286,7 @@ function adminView(){
   <header class="topbar" style="position:static;border-bottom:1px solid var(--line);background:var(--charcoal);">
     <a class="wordmark" href="#/">TECH <i>/</i> BLITZ</a>
     <div style="display:flex;align-items:center;gap:1.5rem;">
+      ${(es.is_started || S.eventStarted) && clockState().ts ? `<span class="badge mono" style="background:rgba(217,143,44,.15);color:var(--amber);border:1px solid var(--amber);font-size:.82rem;padding:.3rem .7rem;">&#x23f1; <span data-live-phase-label>${clockState().label}</span>: <strong class="cd" data-live-phase data-until="${clockState().ts}">${fmtMs(clockState().ts - now())}</strong></span>` : ''}
       <span class="badge badge-active mono">ADMIN // ${esc(S.user?.register_number || 'Gowtham123')}</span>
       <button class="btn btn-ghost" id="admin-logout-btn" style="min-height:36px;padding:.3rem .8rem;font-size:.78rem;">LOGOUT</button>
     </div>
@@ -2278,17 +2318,42 @@ function renderAdminControl(es, roster = []){
   const isStarted = es.is_started || S.eventStarted;
   return `
   <div class="admin-grid">
-    <div class="admin-card">
+    <div class="admin-card" id="admin-clock-card">
       <div class="mono muted">EVENT CLOCK STATUS</div>
-      <h2 class="display" style="font-size:2.4rem;margin:.5rem 0 .8rem;">${isStarted ? '<span style="color:var(--steel-ink);">INVESTIGATION RUNNING</span>' : '<span style="color:var(--amber);">AWAITING COMMENCEMENT</span>'}</h2>
-      <p style="color:var(--slate);font-size:.9rem;line-height:1.6;">
+      <h2 class="display" id="admin-event-status-h2" style="font-size:2.4rem;margin:.5rem 0 .8rem;">${isEventExpired() ? '<span style="color:var(--amber);">INVESTIGATION CONCLUDED</span>' : isStarted ? '<span style="color:var(--steel-ink);">INVESTIGATION RUNNING</span>' : '<span style="color:var(--amber);">AWAITING COMMENCEMENT</span>'}</h2>
+      ${isStarted ? `
+        <div style="background:rgba(0,0,0,.35);border:1px solid var(--line);padding:1.2rem;margin:1rem 0;border-radius:4px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:1rem;">
+            <div>
+              <div class="mono muted" style="font-size:.78rem;letter-spacing:.05em;">ACTIVE PHASE: <span data-live-phase-label>${esc(clockState().label).toUpperCase()}</span></div>
+              <div class="display cd" data-live-phase data-until="${clockState().ts || 0}" style="font-size:3.2rem;color:var(--amber);line-height:1.1;margin-top:.2rem;">
+                ${clockState().ts ? fmtMs(clockState().ts - now()) : '00:00'}
+              </div>
+            </div>
+            <div>
+              <div class="mono muted" style="font-size:.78rem;letter-spacing:.05em;">TOTAL EVENT REMAINING</div>
+              <div class="display cd" data-live-total data-until="${(es.server_start_time ? new Date(es.server_start_time).getTime() + (es.total_duration_ms || 4200000) : 0)}" style="font-size:2.2rem;color:var(--paper);line-height:1.1;margin-top:.2rem;">
+                ${es.server_start_time ? fmtMs(new Date(es.server_start_time).getTime() + (es.total_duration_ms || 4200000) - now()) : '--:--'}
+              </div>
+            </div>
+          </div>
+          <div class="meter" style="margin-top:1rem;height:6px;">
+            <i data-meter-from="${clockState().from || 0}" data-meter-to="${clockState().ts || 0}" style="width:${Math.max(0,Math.min(100,(clockState().ts-now())/(clockState().ts-clockState().from)*100))}%;background:var(--amber);"></i>
+          </div>
+          <div class="mono muted" data-live-phase-msg style="font-size:.8rem;margin-top:.6rem;">${esc(clockState().msg)}</div>
+        </div>
+      ` : ''}
+      <p style="color:var(--slate);font-size:.9rem;line-height:1.6;margin-top:.8rem;">
         ${isStarted
           ? `Authoritative start timestamp: <strong class="mono" style="color:var(--paper);">${clock(es.server_start_time || S.serverStartTime)}</strong><br>Timer is synchronized across all participants.`
           : `Clicking Start Timer will immediately engage fullscreen mode and unlock case briefing across all 50 participant screens simultaneously.`}
       </p>
-      <div style="margin-top:1.6rem;">
+      <div style="margin-top:1.6rem;display:flex;flex-direction:column;gap:.8rem;">
         <button class="btn btn-red" id="admin-start-timer-btn" ${isStarted ? 'disabled' : ''} style="width:100%;justify-content:center;">
           ${isStarted ? 'TIMER CURRENTLY ACTIVE' : 'START TIMER FOR ALL PARTICIPANTS'}
+        </button>
+        <button class="btn ${areScoresRevealed() ? 'btn-red' : 'btn-ghost'}" id="admin-reveal-scores-btn" style="width:100%;justify-content:center;color:var(--amber);border-color:var(--amber);">
+          ${areScoresRevealed() ? 'SCORES REVEALED TO PARTICIPANTS (UNSEALED)' : 'REVEAL SCORES &amp; SOLUTION FOR ALL PARTICIPANTS'}
         </button>
       </div>
     </div>
@@ -2318,12 +2383,12 @@ function renderAdminControl(es, roster = []){
     </div>
   </div>
 
-  <div class="admin-card">
+  <div class="admin-card" id="admin-roster-container">
     <div class="mono muted">ACTIVE ROSTER SUMMARY (${roster.length} TOTAL)</div>
     <div style="max-height:300px;overflow-y:auto;margin-top:.8rem;">
       <table class="admin-table">
         <thead><tr><th>REGISTER NUMBER</th><th>ROLE</th><th>REGISTERED AT</th><th>ACTION</th></tr></thead>
-        <tbody>
+        <tbody id="admin-roster-tbody">
           ${!roster.length ? `<tr><td colspan="4" style="text-align:center;padding:1.5rem;" class="muted">No users in roster.</td></tr>` : ''}
           ${roster.map(u => `<tr>
             <td><strong>${esc(u.register_number)}</strong></td>
@@ -2368,7 +2433,7 @@ function renderAdminScores(leaderboard = []){
             <th>LAST ACTIVITY</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="admin-leaderboard-tbody">
           ${!leaderboard.length ? `<tr><td colspan="8" style="text-align:center;padding:2rem;" class="muted">No participants active yet.</td></tr>` : ''}
           ${leaderboard.map((p, idx) => `
             <tr>
@@ -2412,6 +2477,107 @@ function renderAdminRequests(requests = []){
   </div>`;
 }
 
+function isUserTyping(){
+  const el = document.activeElement;
+  if(!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+}
+
+function updateAdminLiveElements(ov){
+  if(!ov || !location.hash.startsWith('#/admin')) return;
+  const es = ov.event_state || {};
+
+  // 1. Tab badges
+  const tabScores = document.querySelector('.admin-tab-btn[data-tab="scores"]');
+  if(tabScores) tabScores.textContent = `02 LIVE SCORES (${ov.leaderboard?.length || 0})`;
+  const tabReqs = document.querySelector('.admin-tab-btn[data-tab="requests"]');
+  if(tabReqs){
+    const c = ov.requests?.length || 0;
+    tabReqs.innerHTML = `03 FULLSCREEN REQUESTS ${c ? `<span class="badge badge-blocked">${c}</span>` : ''}`;
+  }
+
+  // 2. Control tab: Roster
+  const rosterSummary = document.querySelector('#admin-roster-container .mono.muted');
+  if(rosterSummary) rosterSummary.textContent = `ACTIVE ROSTER SUMMARY (${(ov.roster || []).length} TOTAL)`;
+
+  const rosterTbody = document.getElementById('admin-roster-tbody');
+  if(rosterTbody && ov.roster){
+    const roster = ov.roster;
+    rosterTbody.innerHTML = !roster.length
+      ? `<tr><td colspan="4" style="text-align:center;padding:1.5rem;" class="muted">No users in roster.</td></tr>`
+      : roster.map(u => `<tr>
+          <td><strong>${esc(u.register_number)}</strong></td>
+          <td><span class="badge ${u.role==='admin'?'badge-active':'badge-active'}">${esc(u.role)}</span></td>
+          <td>${clock(u.created_at)}</td>
+          <td>
+            ${u.role !== 'admin' ? `
+              <button type="button" class="btn btn-ghost btn-remove-user" data-reg="${esc(u.register_number)}" style="min-height:28px;padding:.2rem .6rem;font-size:.72rem;color:var(--red);border-color:var(--red);">REMOVE</button>
+            ` : '<span class="muted mono" style="font-size:.75rem;">PROTECTED</span>'}
+          </td>
+        </tr>`).join('');
+
+    rosterTbody.querySelectorAll('.btn-remove-user').forEach(b => {
+      b.addEventListener('click', async e => {
+        const reg = e.target.dataset.reg;
+        if(!confirm(`Are you sure you want to remove participant ${reg} from the registered database?`)) return;
+        e.target.disabled = true;
+        e.target.textContent = 'REMOVING...';
+        try {
+          await API.adminRemoveUser(reg);
+          const nov = await API.adminOverview().catch(() => null);
+          if(nov){ S.adminOverview = nov; updateAdminLiveElements(nov); }
+        } catch(err) {
+          alert('Error removing student: ' + err.message);
+          e.target.disabled = false;
+          e.target.textContent = 'REMOVE';
+        }
+      });
+    });
+  }
+
+  // 3. Scores tab: Leaderboard
+  const boardTbody = document.getElementById('admin-leaderboard-tbody');
+  if(boardTbody && ov.leaderboard){
+    const leaderboard = ov.leaderboard;
+    boardTbody.innerHTML = !leaderboard.length
+      ? `<tr><td colspan="8" style="text-align:center;padding:2rem;" class="muted">No participants active yet.</td></tr>`
+      : leaderboard.map((p, idx) => `<tr>
+          <td><span class="display" style="font-size:1.4rem;">${pad(idx+1)}</span></td>
+          <td><strong>${esc(p.register_number)}</strong></td>
+          <td><span class="display" style="font-size:1.6rem;color:var(--amber);">${p.score || 0}</span></td>
+          <td>${p.hints_used || 0}</td>
+          <td>+${p.penalty_seconds || 0}s</td>
+          <td>${p.accusation_suspect ? esc(sus(p.accusation_suspect)?.name || p.accusation_suspect) : '<span class="muted">None</span>'}</td>
+          <td><span class="badge ${p.is_blocked ? 'badge-blocked' : 'badge-active'}">${p.is_blocked ? 'BLOCKED' : 'ACTIVE'}</span></td>
+          <td>${clock(p.last_active_at)}</td>
+        </tr>`).join('');
+  }
+
+  // 4. Reveal Scores Button
+  const revBtn = document.getElementById('admin-reveal-scores-btn');
+  if(revBtn){
+    const rev = areScoresRevealed();
+    revBtn.className = `btn ${rev ? 'btn-red' : 'btn-ghost'}`;
+    revBtn.textContent = rev ? 'SCORES REVEALED TO PARTICIPANTS (UNSEALED)' : 'REVEAL SCORES & SOLUTION FOR ALL PARTICIPANTS';
+  }
+
+  // 5. Timer Start Button
+  const startBtn = document.getElementById('admin-start-timer-btn');
+  if(startBtn){
+    const isStarted = es.is_started || S.eventStarted;
+    startBtn.disabled = isStarted;
+    startBtn.textContent = isStarted ? 'TIMER CURRENTLY ACTIVE' : 'START TIMER FOR ALL PARTICIPANTS';
+  }
+
+  // 6. Header Status
+  const statusH2 = document.getElementById('admin-event-status-h2');
+  if(statusH2){
+    const isStarted = es.is_started || S.eventStarted;
+    statusH2.innerHTML = isEventExpired() ? '<span style="color:var(--amber);">INVESTIGATION CONCLUDED</span>' : isStarted ? '<span style="color:var(--steel-ink);">INVESTIGATION RUNNING</span>' : '<span style="color:var(--amber);">AWAITING COMMENCEMENT</span>';
+  }
+}
+
 function bindAdmin(){
   document.querySelectorAll('.admin-tab-btn').forEach(b => {
     b.addEventListener('click', async () => {
@@ -2425,17 +2591,51 @@ function bindAdmin(){
     });
   });
 
+  $('#admin-reveal-scores-btn')?.addEventListener('click', async e => {
+    const isRev = areScoresRevealed();
+    const promptMsg = isRev
+      ? 'Scores are currently revealed. Conceal scores and solutions from participants again?'
+      : 'Reveal scores and case solution for all participants now? This will immediately unseal results and final rankings on participant terminals.';
+    if(!confirm(promptMsg)) return;
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = 'UPDATING...';
+    try {
+      const res = await API.adminRevealScores(!isRev);
+      S.scoresRevealed = Boolean(res.scores_revealed);
+      if(S.adminOverview?.event_state){
+        S.adminOverview.event_state.scores_revealed = S.scoresRevealed;
+      }
+      const ov = await API.adminOverview().catch(() => null);
+      if(ov){
+        S.adminOverview = ov;
+        updateAdminLiveElements(ov);
+      }
+    } catch(err) {
+      alert('Error updating score reveal: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      const rev = areScoresRevealed();
+      btn.className = `btn ${rev ? 'btn-red' : 'btn-ghost'}`;
+      btn.textContent = rev ? 'SCORES REVEALED TO PARTICIPANTS (UNSEALED)' : 'REVEAL SCORES & SOLUTION FOR ALL PARTICIPANTS';
+    }
+  });
+
   $('#admin-refresh-scores-btn')?.addEventListener('click', async e => {
     const btn = e.target;
     btn.disabled = true;
     btn.textContent = 'REFRESHING...';
     try {
       const ov = await API.adminOverview();
-      if(ov) S.adminOverview = ov;
+      if(ov){
+        S.adminOverview = ov;
+        updateAdminLiveElements(ov);
+      }
     } catch(err) {
       void err;
     } finally {
-      render();
+      btn.disabled = false;
+      btn.textContent = '↻ REFRESH SCORES';
     }
   });
 
@@ -2475,8 +2675,10 @@ function bindAdmin(){
       input.value = '';
       alert(`Participant ${val} added to roster successfully.`);
       const ov = await API.adminOverview().catch(() => null);
-      if(ov) S.adminOverview = ov;
-      render();
+      if(ov){
+        S.adminOverview = ov;
+        updateAdminLiveElements(ov);
+      }
     } catch(err) {
       alert('Error adding participant: ' + err.message);
     }
@@ -2492,8 +2694,10 @@ function bindAdmin(){
       input.value = '';
       alert(`Administrator ${val} added successfully.`);
       const ov = await API.adminOverview().catch(() => null);
-      if(ov) S.adminOverview = ov;
-      render();
+      if(ov){
+        S.adminOverview = ov;
+        updateAdminLiveElements(ov);
+      }
     } catch(err) {
       alert('Error adding admin: ' + err.message);
     }
@@ -2508,8 +2712,10 @@ function bindAdmin(){
       try {
         await API.adminRemoveUser(reg);
         const ov = await API.adminOverview().catch(() => null);
-        if(ov) S.adminOverview = ov;
-        render();
+        if(ov){
+          S.adminOverview = ov;
+          updateAdminLiveElements(ov);
+        }
       } catch(err) {
         alert('Error removing student: ' + err.message);
         e.target.disabled = false;
@@ -2527,8 +2733,10 @@ function bindAdmin(){
       try {
         await API.adminUnblock(reqId, reg);
         const ov = await API.adminOverview().catch(() => null);
-        if(ov) S.adminOverview = ov;
-        render();
+        if(ov){
+          S.adminOverview = ov;
+          updateAdminLiveElements(ov);
+        }
       } catch(err) {
         alert('Error unblocking: ' + err.message);
         e.target.disabled = false;
@@ -2706,13 +2914,29 @@ function initRealtime(){
             S.serverStartTime = new Date(ov.event_state.server_start_time).getTime();
             S.t0 = S.serverStartTime;
           }
-          if(location.hash.startsWith('#/admin')) render();
+          if(typeof ov.event_state?.scores_revealed === 'boolean'){
+            S.scoresRevealed = ov.event_state.scores_revealed;
+          }
+          if(location.hash.startsWith('#/admin')){
+            if(isUserTyping() || $('#admin-clock-card')){
+              updateAdminLiveElements(ov);
+            } else {
+              render();
+            }
+          }
         }
       } else if(S.user.role === 'participant'){
         const sess = await API.getSession();
         if(sess){
           if(sess.event_state?.is_started && !S.eventStarted){
             handleTimerStarted(sess.event_state.server_start_time);
+          }
+          if(typeof sess.event_state?.scores_revealed === 'boolean'){
+            const prev = S.scoresRevealed;
+            S.scoresRevealed = sess.event_state.scores_revealed;
+            if(prev !== S.scoresRevealed && location.hash.startsWith('#/results')){
+              render();
+            }
           }
           if(sess.is_blocked && !S.isBlocked){
             setBlockedState(true, false);
@@ -2751,17 +2975,43 @@ function render(){
       location.hash = '#/';
       return;
     }
+    const savedFocusId = document.activeElement?.id;
+    const savedPartVal = $('#add-part-reg')?.value;
+    const savedAdminVal = $('#add-admin-reg')?.value;
+    const savedSelStart = document.activeElement?.selectionStart;
+    const savedSelEnd = document.activeElement?.selectionEnd;
+
     const app = $('#app');
     app.innerHTML = adminView();
     app.dataset.route = '/admin';
     bindAdmin();
     document.title = 'TECH BLITZ | Admin Console';
+
+    if(savedPartVal && $('#add-part-reg')) $('#add-part-reg').value = savedPartVal;
+    if(savedAdminVal && $('#add-admin-reg')) $('#add-admin-reg').value = savedAdminVal;
+    if(savedFocusId && document.getElementById(savedFocusId)){
+      const el = document.getElementById(savedFocusId);
+      el.focus();
+      if(typeof savedSelStart === 'number' && typeof savedSelEnd === 'number' && el.setSelectionRange){
+        el.setSelectionRange(savedSelStart, savedSelEnd);
+      }
+    }
+
     if(!S.adminOverview){
       API.adminOverview().then(ov => {
-        if(ov){ S.adminOverview = ov; render(); }
+        if(ov){
+          S.adminOverview = ov;
+          updateAdminLiveElements(ov);
+        }
       }).catch(() => {});
     }
     lastPhase = phaseKey();
+    return;
+  }
+
+  // 3. Quiz conclusion: redirect participants away from puzzle solving if event expired
+  if(isEventExpired() && S.user?.role === 'participant' && ['challenge','final-deduction'].includes(parts[0])){
+    location.hash = '#/results';
     return;
   }
 
@@ -2806,14 +3056,64 @@ let lastPhase = '';
 function phaseKey(){
   const m = location.hash.match(/challenge\/([\w-]+)/);
   const hint = m && S.opened[m[1]] ? now() >= S.opened[m[1]] + HINT_DELAY_MS : false;
-  return [S.t0 != null, now() >= ((windows()||[])[0]||{}).open, ...DATA.detectives.map(d => +detUnlocked(d.id) + '' + +detClosed(d.id)), hint].join('|');
+  return [S.t0 != null, now() >= ((windows()||[])[0]||{}).open, ...DATA.detectives.map(d => +detUnlocked(d.id) + '' + +detClosed(d.id)), hint, isEventExpired(), areScoresRevealed()].join('|');
 }
 
 setInterval(() => {
-  document.querySelectorAll('[data-until]').forEach(el => { el.textContent = fmtMs(+el.dataset.until - now()); });
-  document.querySelectorAll('[data-meter-to]').forEach(el => { const a = +el.dataset.meterFrom, b = +el.dataset.meterTo; el.style.width = Math.max(0, Math.min(100, (b - now()) / (b - a) * 100)) + '%'; });
-  if(phaseKey() !== lastPhase && !$('#dlg')?.open){
-    const focusId = document.activeElement?.id; render();
+  const curNow = now();
+  const curClock = clockState();
+  const expired = isEventExpired();
+
+  // 1. Live Countdown Updates
+  document.querySelectorAll('[data-until]').forEach(el => {
+    const targetTs = +el.dataset.until;
+    if(targetTs > 0){
+      el.textContent = fmtMs(targetTs - curNow);
+    }
+  });
+
+  // 2. Progress Meters
+  document.querySelectorAll('[data-meter-to]').forEach(el => {
+    const a = +el.dataset.meterFrom, b = +el.dataset.meterTo;
+    if(b > a){
+      el.style.width = Math.max(0, Math.min(100, (b - curNow) / (b - a) * 100)) + '%';
+    }
+  });
+
+  // 3. Dynamic Phase Elements
+  document.querySelectorAll('[data-live-phase]').forEach(el => {
+    if(curClock.ts){
+      el.dataset.until = curClock.ts;
+      el.textContent = fmtMs(curClock.ts - curNow);
+    } else {
+      el.textContent = '00:00';
+    }
+  });
+  document.querySelectorAll('[data-live-phase-label]').forEach(el => {
+    el.textContent = curClock.label;
+  });
+  document.querySelectorAll('[data-live-phase-msg]').forEach(el => {
+    el.textContent = curClock.msg;
+  });
+  document.querySelectorAll('[data-live-total]').forEach(el => {
+    if(S.t0 != null){
+      const totalEnd = S.t0 + 4200000;
+      el.dataset.until = totalEnd;
+      el.textContent = fmtMs(totalEnd - curNow);
+    }
+  });
+
+  // 4. Case ends for everyone after the final 20 mins with Lisbon
+  if(expired && S.user?.role === 'participant' && !location.hash.startsWith('#/results')){
+    location.hash = '#/results';
+    render();
+    return;
+  }
+
+  // 5. Phase transition rendering (guarded against active typing)
+  if(phaseKey() !== lastPhase && !$('#dlg')?.open && !isUserTyping()){
+    const focusId = document.activeElement?.id;
+    render();
     if(focusId && document.getElementById(focusId)) document.getElementById(focusId).focus();
   }
 }, 1000);

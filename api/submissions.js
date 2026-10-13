@@ -24,6 +24,16 @@ export default async function handler(req, res) {
 
   const nowIso = new Date().toISOString();
 
+  // 0. Enforce authoritative event clock: close quiz when time expires
+  const es = localStore.event_state;
+  if (es?.is_started && es.server_start_time) {
+    const elapsed = Date.now() - new Date(es.server_start_time).getTime();
+    const maxDuration = (es.total_duration_ms || 4200000) + 15000; // 15s grace for network
+    if (elapsed > maxDuration) {
+      return res.status(403).json({ error: 'Investigation time limit has ended. Submissions are closed.' });
+    }
+  }
+
   // 1. Authoritative correctness evaluation server-side
   const isCorrect = checkAnswer(puzzle_id, submitted_answer);
 
@@ -65,9 +75,12 @@ export default async function handler(req, res) {
         .ilike('register_number', regNum)
         .eq('is_correct', true);
 
-      updatedScore = typeof correctCount === 'number'
-        ? correctCount
-        : (isCorrect ? (session?.score || 0) + 1 : (session?.score || 0));
+      const baseScore = session?.score || 0;
+      let calculatedScore = isCorrect ? baseScore + 1 : baseScore;
+      if (!subError && typeof correctCount === 'number' && correctCount > 0) {
+        calculatedScore = Math.max(calculatedScore, correctCount);
+      }
+      updatedScore = calculatedScore;
 
       // Update participant session score
       await supabase

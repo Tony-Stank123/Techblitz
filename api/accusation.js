@@ -25,6 +25,16 @@ export default async function handler(req, res) {
   const isKiller = checkAccusation(suspect_id);
   const nowIso = new Date().toISOString();
 
+  // Enforce authoritative event clock: close accusations when time expires
+  const es = localStore.event_state;
+  if (es?.is_started && es.server_start_time) {
+    const elapsed = Date.now() - new Date(es.server_start_time).getTime();
+    const maxDuration = (es.total_duration_ms || 4200000) + 15000;
+    if (elapsed > maxDuration) {
+      return res.status(403).json({ error: 'Investigation time limit has ended. Accusations are closed.' });
+    }
+  }
+
   if (supabase) {
     const { data: session } = await supabase
       .from('participant_sessions')

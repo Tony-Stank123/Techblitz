@@ -45,7 +45,8 @@ export const localStore = {
     id: 1,
     is_started: false,
     server_start_time: null,
-    total_duration_ms: 4200000
+    total_duration_ms: 4200000,
+    scores_revealed: false
   },
   participant_sessions: new Map(savedData?.participant_sessions || [
     ['21bce1001', {

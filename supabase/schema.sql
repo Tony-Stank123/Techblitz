@@ -8,13 +8,14 @@ CREATE TABLE IF NOT EXISTS event_state (
   is_started BOOLEAN NOT NULL DEFAULT FALSE,
   server_start_time TIMESTAMPTZ NULL,          -- Set authoritatively when Admin starts timer
   total_duration_ms BIGINT NOT NULL DEFAULT 4200000, -- 70 minutes (Reading 5m + Cho 15m + Rigsby 15m + Van Pelt 15m + Lisbon 20m)
+  scores_revealed BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Seed single-row event state if not present
-INSERT INTO event_state (id, is_started, server_start_time, total_duration_ms)
-VALUES (1, FALSE, NULL, 4200000)
+INSERT INTO event_state (id, is_started, server_start_time, total_duration_ms, scores_revealed)
+VALUES (1, FALSE, NULL, 4200000, FALSE)
 ON CONFLICT (id) DO NOTHING;
 
 -- 2. User Roster & Role Store (Admin Whitelist & Participant Roster)

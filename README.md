@@ -71,7 +71,7 @@ The file is organised in commented sections (`/* ============ NAME ============ 
 | Object / function | Purpose |
 |---|---|
 | `DATA` | Event copy, synopsis, timeline, suspects, detectives (incl. "in the field" lines), `timing`, evidence records |
-| `DATA.timing` | Case clock: `readingMin: 5`, `sectionMin: { cho:15, rigsby:15, 'van-pelt':20, lisbon:20 }`, `closeOnTimeout: true` |
+| `DATA.timing` | Case clock: `readingMin: 5`, `sectionMin: { cho:15, rigsby:15, 'van-pelt':15, lisbon:20 }`, `closeOnTimeout: true` |
 | `PUZZLES` | Public puzzle content: an exact copy of `puzzles/puzzles.public.json` (checked by `npm test`) |
 | `FORMATS` / `fmtOf()` | Answer-box shape per puzzle (time `hh:mm`, text, number with `mine =` / `gone =` prefix). UI guidance only, never used for checking |
 | `API` | **The mock backend seam**: `submit`, `requestHint`, `accuse` (see §10) |
@@ -111,7 +111,7 @@ Images are WebP with transparency preserved. Characters are rendered greyscale i
 | Area | Status |
 |---|---|
 | Navigation, routes, layouts, responsive design, accessibility | **Real**: fully implemented and tested |
-| Case clock (reading 5 min → Cho 15 → Rigsby 15 → Van Pelt 20 → Lisbon 20), case locking, Part B unlocking after Part A | **Real, but client-side**: the clock runs in the browser from when the player opens the briefing |
+| Case clock (reading 5 min → Cho 15 → Rigsby 15 → Van Pelt 15 → Lisbon 20), case locking, Part B unlocking after Part A | **Real, but client-side**: the clock runs in the browser from when the player opens the briefing |
 | Answer submission: confirm dialog, "Answer recorded" receipt, lock-on-submit, raw value sent exactly as typed | **Real UI, mock transport**: `API.submit` returns a fake receipt after 700 ms |
 | Hints: one per part, available after 5 min, +60 s penalty notice | **UI only**: `API.requestHint` returns `hint: null`. Hint **text lives server-side** and is never in the page |
 | Final accusation | **Real UI, mock transport** (`API.accuse`) |
