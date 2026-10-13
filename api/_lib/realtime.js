@@ -9,16 +9,31 @@ export async function broadcastEvent(channelName, eventName, payload) {
   }
 
   try {
-    const channel = supabase.channel(channelName);
-    await channel.subscribe();
-    await channel.send({
-      type: 'broadcast',
-      event: eventName,
-      payload
+    const broadcastPromise = new Promise(async resolve => {
+      try {
+        const channel = supabase.channel(channelName);
+        channel.subscribe(status => {
+          if (status === 'SUBSCRIBED') {
+            channel.send({
+              type: 'broadcast',
+              event: eventName,
+              payload
+            }).catch(() => {}).finally(() => {
+              supabase.removeChannel(channel).catch(() => {});
+              resolve();
+            });
+          }
+        });
+      } catch {
+        resolve();
+      }
     });
-    // Remove channel subscription to prevent leaking WebSocket handles in serverless
-    await supabase.removeChannel(channel);
+
+    await Promise.race([
+      broadcastPromise,
+      new Promise(resolve => setTimeout(resolve, 800))
+    ]);
   } catch (err) {
-    console.error(`[REALTIME ERROR] Failed to broadcast ${eventName} on ${channelName}:`, err);
+    console.warn(`[REALTIME NON-BLOCKING] Broadcast ${eventName} on ${channelName}:`, err.message);
   }
 }
