@@ -1386,11 +1386,7 @@ const isEventExpired = (eventState) => {
   const startTime = S.t0 || S.serverStartTime || (es?.server_start_time ? new Date(es.server_start_time).getTime() : null);
   if(!startTime) return false;
   const duration = es?.total_duration_ms || 4200000;
-  if(now() >= startTime + duration) return true;
-  const ws = windows(es);
-  const lastWin = ws && ws.length ? ws[ws.length - 1] : null;
-  if(lastWin) return now() >= lastWin.close;
-  return false;
+  return now() >= startTime + duration;
 };
 const areScoresRevealed = () => {
   return Boolean(S.scoresRevealed || S.adminOverview?.event_state?.scores_revealed || isEventExpired());
@@ -2400,7 +2396,7 @@ function renderAdminControl(es, roster = []){
       </p>
       <div style="margin-top:1.6rem;display:flex;flex-direction:column;gap:.8rem;">
         <button class="btn btn-red" id="admin-start-timer-btn" style="width:100%;justify-content:center;">
-          ${isRunning ? '&#x21ba; RESTART TIMER FOR ALL PARTICIPANTS' : expired ? '&#x21ba; RESTART TIMER FOR ALL PARTICIPANTS' : 'START TIMER FOR ALL PARTICIPANTS'}
+          ${isRunning ? '&#x21ba; RESET TIMER FOR ALL PARTICIPANTS' : 'START TIMER FOR ALL PARTICIPANTS'}
         </button>
         <button class="btn ${areScoresRevealed() ? 'btn-red' : 'btn-ghost'}" id="admin-reveal-scores-btn" style="width:100%;justify-content:center;color:var(--amber);border-color:var(--amber);">
           ${areScoresRevealed() ? 'SCORES REVEALED TO PARTICIPANTS (UNSEALED)' : 'REVEAL SCORES &amp; SOLUTION FOR ALL PARTICIPANTS'}
@@ -2626,7 +2622,7 @@ function updateAdminLiveElements(ov){
   const startBtn = document.getElementById('admin-start-timer-btn');
   if(startBtn){
     startBtn.disabled = false;
-    startBtn.textContent = isRunning ? '↺ RESTART TIMER FOR ALL PARTICIPANTS' : expired ? '↺ RESTART TIMER FOR ALL PARTICIPANTS' : 'START TIMER FOR ALL PARTICIPANTS';
+    startBtn.textContent = isRunning ? '↺ RESET TIMER FOR ALL PARTICIPANTS' : 'START TIMER FOR ALL PARTICIPANTS';
   }
 
   // 6. Header Status
@@ -2835,30 +2831,60 @@ function bindAdmin(){
 
   $('#admin-start-timer-btn')?.addEventListener('click', async e => {
     const isRunning = Boolean((S.adminOverview?.event_state?.is_started || S.eventStarted) && !isEventExpired());
-    const promptMsg = isRunning
-      ? 'A timer is currently active. Do you want to RESTART the case timer for all participants? This will restart the 70-minute countdown from the beginning.'
-      : 'Start case timer for all participants now? This will simultaneously initiate the countdown and enforce fullscreen.';
-    if(!confirm(promptMsg)) return;
-    const btn = e.target;
-    btn.disabled = true;
-    btn.textContent = 'STARTING TIMER...';
-    try {
-      const res = await API.adminStartTimer();
-      S.eventStarted = true;
-      S.serverStartTime = new Date(res.server_start_time).getTime();
-      S.t0 = S.serverStartTime;
+    if (isRunning) {
+      if (!confirm('⚠️ RESET TIMER FOR ALL PARTICIPANTS?\n\nThis will stop the active clock and reset the timer back to Start Timer across all participant terminals.\n\nAre you sure you want to proceed?')) return;
+      const btn = e.target;
+      btn.disabled = true;
+      btn.textContent = 'RESETTING TIMER...';
+
+      // 1. Immediately reset client state so button flips back to 'START TIMER'
+      S.eventStarted = false;
+      S.serverStartTime = null;
+      S.t0 = null;
       if (S.adminOverview?.event_state) {
-        S.adminOverview.event_state.is_started = true;
-        S.adminOverview.event_state.server_start_time = res.server_start_time;
-        S.adminOverview.event_state.total_duration_ms = res.total_duration_ms || 4200000;
+        S.adminOverview.event_state.is_started = false;
+        S.adminOverview.event_state.server_start_time = null;
       }
-      const ov = await API.adminOverview().catch(() => null);
-      if(ov) S.adminOverview = ov;
       render();
-    } catch(err) {
-      alert('Error starting timer: ' + err.message);
-      btn.disabled = false;
-      render();
+
+      try {
+        await API.adminResetEvent();
+        const ov = await API.adminOverview().catch(() => null);
+        if (ov) {
+          if (ov.event_state) {
+            ov.event_state.is_started = false;
+            ov.event_state.server_start_time = null;
+          }
+          S.adminOverview = ov;
+        }
+        render();
+      } catch (err) {
+        alert('Timer reset locally. Server notice: ' + err.message);
+        render();
+      }
+    } else {
+      if (!confirm('Start case timer for all participants now? This will simultaneously initiate the countdown and enforce fullscreen.')) return;
+      const btn = e.target;
+      btn.disabled = true;
+      btn.textContent = 'STARTING TIMER...';
+      try {
+        const res = await API.adminStartTimer();
+        S.eventStarted = true;
+        S.serverStartTime = new Date(res.server_start_time).getTime();
+        S.t0 = S.serverStartTime;
+        if (S.adminOverview?.event_state) {
+          S.adminOverview.event_state.is_started = true;
+          S.adminOverview.event_state.server_start_time = res.server_start_time;
+          S.adminOverview.event_state.total_duration_ms = res.total_duration_ms || 4200000;
+        }
+        const ov = await API.adminOverview().catch(() => null);
+        if (ov) S.adminOverview = ov;
+        render();
+      } catch (err) {
+        alert('Error starting timer: ' + err.message);
+        btn.disabled = false;
+        render();
+      }
     }
   });
 
