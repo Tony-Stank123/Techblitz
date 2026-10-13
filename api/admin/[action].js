@@ -6,6 +6,7 @@ import addUserHandler from '../_lib/admin/add-user.js';
 import removeUserHandler from '../_lib/admin/remove-user.js';
 import unblockHandler from '../_lib/admin/unblock.js';
 import revealScoresHandler from '../_lib/admin/reveal-scores.js';
+import resetHandler from '../_lib/admin/reset.js';
 
 const handlers = {
   'overview': overviewHandler,
@@ -13,7 +14,9 @@ const handlers = {
   'add-user': addUserHandler,
   'remove-user': removeUserHandler,
   'unblock': unblockHandler,
-  'reveal-scores': revealScoresHandler
+  'reveal-scores': revealScoresHandler,
+  'reset': resetHandler,
+  'reset-event': resetHandler
 };
 
 export default async function handler(req, res) {

@@ -1225,6 +1225,9 @@ const API = {
       if (endpoint.startsWith('/api/fullscreen')) {
         return { success: true };
       }
+      if (endpoint.startsWith('/api/admin/reset')) {
+        return { success: true };
+      }
       throw err;
     }
   },
@@ -1289,6 +1292,12 @@ const API = {
     return this.request('/api/admin/reveal-scores', {
       method: 'POST',
       body: JSON.stringify({ revealed })
+    });
+  },
+  adminResetEvent() {
+    return this.request('/api/admin/reset-event', {
+      method: 'POST',
+      body: JSON.stringify({})
     });
   }
 };
@@ -2355,6 +2364,9 @@ function renderAdminControl(es, roster = []){
         <button class="btn ${areScoresRevealed() ? 'btn-red' : 'btn-ghost'}" id="admin-reveal-scores-btn" style="width:100%;justify-content:center;color:var(--amber);border-color:var(--amber);">
           ${areScoresRevealed() ? 'SCORES REVEALED TO PARTICIPANTS (UNSEALED)' : 'REVEAL SCORES &amp; SOLUTION FOR ALL PARTICIPANTS'}
         </button>
+        <button class="btn btn-ghost" id="admin-reset-event-btn" style="width:100%;justify-content:center;color:var(--red);border-color:var(--red);">
+          &#x21ba; RESET ENTIRE EVENT (PRESERVES USERS &amp; ADMINS)
+        </button>
       </div>
     </div>
 
@@ -2618,6 +2630,47 @@ function bindAdmin(){
       const rev = areScoresRevealed();
       btn.className = `btn ${rev ? 'btn-red' : 'btn-ghost'}`;
       btn.textContent = rev ? 'SCORES REVEALED TO PARTICIPANTS (UNSEALED)' : 'REVEAL SCORES & SOLUTION FOR ALL PARTICIPANTS';
+    }
+  });
+
+  $('#admin-reset-event-btn')?.addEventListener('click', async e => {
+    const confirmed = confirm(
+      '⚠️ RESET ENTIRE EVENT?\n\n' +
+      'This will:\n' +
+      '• Stop and reset the timer for all participants\n' +
+      '• Re-seal answers and revert the score reveal\n' +
+      '• Clear all participant answers, hints, and accusations\n' +
+      '• Reset live leaderboards back to zero\n\n' +
+      'NOTE: All registered participants and admins in the roster will be KEPT.\n\n' +
+      'Are you sure you want to proceed?'
+    );
+    if (!confirmed) return;
+
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = 'RESETTING EVENT...';
+
+    try {
+      await API.adminResetEvent();
+      S.eventStarted = false;
+      S.serverStartTime = null;
+      S.t0 = null;
+      S.scoresRevealed = false;
+      if (S.adminOverview?.event_state) {
+        S.adminOverview.event_state.is_started = false;
+        S.adminOverview.event_state.server_start_time = null;
+        S.adminOverview.event_state.scores_revealed = false;
+      }
+      alert('Event has been successfully reset. All submissions cleared; roster preserved.');
+      const ov = await API.adminOverview().catch(() => null);
+      if (ov) {
+        S.adminOverview = ov;
+      }
+      render();
+    } catch (err) {
+      alert('Error resetting event: ' + err.message);
+      btn.disabled = false;
+      btn.textContent = '↺ RESET ENTIRE EVENT (PRESERVES USERS & ADMINS)';
     }
   });
 
@@ -2913,6 +2966,10 @@ function initRealtime(){
             S.eventStarted = true;
             S.serverStartTime = new Date(ov.event_state.server_start_time).getTime();
             S.t0 = S.serverStartTime;
+          } else if(!ov.event_state?.is_started && S.eventStarted){
+            S.eventStarted = false;
+            S.serverStartTime = null;
+            S.t0 = null;
           }
           if(typeof ov.event_state?.scores_revealed === 'boolean'){
             S.scoresRevealed = ov.event_state.scores_revealed;
@@ -2930,6 +2987,28 @@ function initRealtime(){
         if(sess){
           if(sess.event_state?.is_started && !S.eventStarted){
             handleTimerStarted(sess.event_state.server_start_time);
+          } else if((!sess.event_state || !sess.event_state.is_started) && (S.eventStarted || Object.keys(S.subs).length > 0 || S.accusation)){
+            S.eventStarted = false;
+            S.serverStartTime = null;
+            S.t0 = null;
+            S.scoresRevealed = false;
+            S.subs = {};
+            S.hints = {};
+            S.accusation = null;
+            S.score = 0;
+            S.opened = {};
+            S.pending = {};
+            S.pendingTime = {};
+            S.isBlocked = false;
+            const blocker = $('#fs-blocker');
+            if(blocker) blocker.classList.remove('active');
+            const entryModal = $('#fs-entry');
+            if(entryModal) entryModal.hidden = true;
+            if(location.hash !== '#/' && !location.hash.startsWith('#/briefing')){
+              location.hash = '#/';
+            } else {
+              render();
+            }
           }
           if(typeof sess.event_state?.scores_revealed === 'boolean'){
             const prev = S.scoresRevealed;

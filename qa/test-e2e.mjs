@@ -255,6 +255,50 @@ try {
   assert.equal(accRes.data.status, 'recorded');
   console.log('✓ Final accusation submitted and registered');
 
+  console.log('\n--- 9. Event Reset & Roster Preservation ---');
+  // First, verify non-admin cannot reset
+  const partResetRes = await req('/api/admin/reset-event', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${partToken}` }
+  });
+  assert.equal(partResetRes.status, 403);
+  console.log('✓ Non-admin cannot reset event (403)');
+
+  // Admin executes reset
+  const resetRes = await req('/api/admin/reset-event', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(resetRes.status, 200);
+  assert.equal(resetRes.data.success, true);
+  console.log('✓ Admin successfully triggered full event reset');
+
+  // Verify participant session is reset to initial state
+  const partSessRes = await req('/api/auth/session', {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${partToken}` }
+  });
+  assert.equal(partSessRes.status, 200);
+  assert.equal(partSessRes.data.event_state.is_started, false);
+  assert.equal(partSessRes.data.event_state.server_start_time, null);
+  assert.equal(partSessRes.data.event_state.scores_revealed, false);
+  assert.equal(partSessRes.data.score, 0);
+  assert.equal(partSessRes.data.accusation, null);
+  assert.equal(Object.keys(partSessRes.data.subs).length, 0);
+  console.log('✓ Participant session completely reset to initial baseline');
+
+  // Verify admin overview: roster preserved, leaderboard reset
+  const ovRes = await req('/api/admin/overview', {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(ovRes.status, 200);
+  assert.equal(ovRes.data.event_state.is_started, false);
+  assert.equal(ovRes.data.event_state.scores_revealed, false);
+  assert.ok(ovRes.data.roster.some(u => u.register_number.toLowerCase() === 'gowtham123'));
+  assert.ok(ovRes.data.roster.some(u => u.register_number.toLowerCase() === '21bce1001'));
+  console.log('✓ Admin and participant details fully preserved in roster');
+
   console.log('\n========================================');
   console.log('ALL END-TO-END INTEGRATION TESTS PASSED!');
   console.log('========================================');

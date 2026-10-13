@@ -47,4 +47,29 @@ console.assert(loginRes.data.role === 'admin', 'Gowtham123 must receive admin ro
 console.assert(typeof loginRes.data.token === 'string', 'Login must issue token');
 console.log('Login handler returned:', loginRes.data.role, loginRes.data.register_number);
 
+import adminActionHandler from '../api/admin/[action].js';
+import { localStore } from '../api/_lib/db.js';
+
+// Admin Reset Event Test
+const adminToken = token;
+localStore.submissions.push({ id: 999, register_number: '21BCE1001', puzzle_id: 'cho-a', recorded_at: new Date().toISOString() });
+localStore.event_state.is_started = true;
+localStore.event_state.scores_revealed = true;
+const userCountBefore = localStore.users.size;
+
+const resetRes = mockRes();
+await adminActionHandler({
+  method: 'POST',
+  headers: { authorization: `Bearer ${adminToken}` },
+  query: { action: 'reset-event' }
+}, resetRes);
+
+console.assert(resetRes.data.success === true, 'Reset event should succeed');
+console.assert(localStore.event_state.is_started === false, 'Event state is_started should be false');
+console.assert(localStore.event_state.scores_revealed === false, 'Scores revealed should be false');
+console.assert(localStore.submissions.length === 0, 'Submissions should be cleared');
+console.assert(localStore.users.size === userCountBefore, 'All users and admins must be preserved');
+console.assert(localStore.users.has('gowtham123') === true, 'Admin Gowtham123 must remain in roster');
+console.log('Admin reset test passed: timer stopped, scores reset, submissions cleared, users & admins preserved.');
+
 console.log('ALL MILESTONE 1 BACKEND TESTS PASSED SUCCESSFULLY!');

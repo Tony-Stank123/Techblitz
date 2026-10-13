@@ -68,10 +68,11 @@ export default async function handler(req, res) {
   }
 
   // Fallback to localStore
-  if (!eventState.server_start_time && localStore.event_state.is_started) {
+  if (!supabase) {
+    eventState = { ...localStore.event_state };
+  } else if (!eventState.server_start_time && localStore.event_state.is_started) {
     eventState = localStore.event_state;
   }
-  eventState.scores_revealed = Boolean(eventState.scores_revealed || localStore.event_state?.scores_revealed);
   if (user.role === 'participant') {
     const localSess = getParticipantSession(user.register_number);
     if (localSess) {

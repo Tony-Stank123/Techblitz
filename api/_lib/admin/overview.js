@@ -77,10 +77,11 @@ export default async function handler(req, res) {
   }
 
   // Fallback / merge with localStore
-  if (!eventState.server_start_time && localStore.event_state.is_started) {
+  if (!supabase) {
+    eventState = { ...localStore.event_state };
+  } else if (!eventState.server_start_time && localStore.event_state.is_started) {
     eventState = localStore.event_state;
   }
-  eventState.scores_revealed = Boolean(eventState.scores_revealed || localStore.event_state?.scores_revealed);
   if (roster.length === 0) {
     roster = [...localStore.users.values()];
   }
