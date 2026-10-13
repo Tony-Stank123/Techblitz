@@ -1,6 +1,6 @@
 // api/submissions.js
-// Authoritative Answer Evaluation & Submission Endpoint
-import { supabase, localStore } from './_lib/db.js';
+// Authoritative Answer Evaluation & Live Score Submission Endpoint
+import { supabase, localStore, getParticipantSession, upsertParticipantSession, persistStore } from './_lib/db.js';
 import { requireUser } from './_lib/auth.js';
 import { checkAnswer } from './_lib/answers.js';
 import { broadcastEvent } from './_lib/realtime.js';
@@ -24,63 +24,92 @@ export default async function handler(req, res) {
 
   const nowIso = new Date().toISOString();
 
-  // Evaluate correctness server-side against secret key
+  // 1. Authoritative correctness evaluation server-side
   const isCorrect = checkAnswer(puzzle_id, submitted_answer);
 
+  let updatedScore = 0;
+
   if (supabase) {
-    // Check if participant is currently blocked
-    const { data: session } = await supabase
-      .from('participant_sessions')
-      .select('is_blocked, score, hints_used, penalty_seconds')
-      .eq('register_number', regNum)
-      .single();
+    try {
+      // Check if participant is currently blocked (case-insensitive)
+      const { data: session } = await supabase
+        .from('participant_sessions')
+        .select('is_blocked, score, hints_used, penalty_seconds')
+        .ilike('register_number', regNum)
+        .maybeSingle();
 
-    if (session?.is_blocked) {
-      return res.status(403).json({ error: 'fullscreen mode exited. Inform an admin to get unblocked.' });
-    }
+      if (session?.is_blocked) {
+        return res.status(403).json({ error: 'fullscreen mode exited. Inform an admin to get unblocked.' });
+      }
 
-    // Insert submission record (unique per user + puzzle)
-    const { error: subError } = await supabase
-      .from('submissions')
-      .insert({
-        register_number: regNum,
-        puzzle_id,
-        raw_answer: String(submitted_answer),
-        is_correct: isCorrect,
-        recorded_at: nowIso
-      });
+      // Record submission (unique per user + puzzle)
+      const { error: subError } = await supabase
+        .from('submissions')
+        .insert({
+          register_number: regNum,
+          puzzle_id,
+          raw_answer: String(submitted_answer),
+          is_correct: isCorrect,
+          recorded_at: nowIso
+        });
 
-    // If duplicate submission (already answered), log and return existing receipt
-    if (subError && subError.code === '23505') {
-      return res.status(200).json({ status: 'recorded', recorded_at: nowIso });
-    }
+      // If duplicate submission (already recorded), calculate and return
+      if (subError && subError.code === '23505') {
+        return res.status(200).json({ status: 'recorded', recorded_at: nowIso });
+      }
 
-    // If correct, increment participant score and emit live update to admin
-    if (isCorrect && session) {
-      const newScore = (session.score || 0) + 1;
+      // Calculate authoritative live score directly from verified submissions
+      const { count: correctCount } = await supabase
+        .from('submissions')
+        .select('*', { count: 'exact', head: true })
+        .ilike('register_number', regNum)
+        .eq('is_correct', true);
+
+      updatedScore = typeof correctCount === 'number'
+        ? correctCount
+        : (isCorrect ? (session?.score || 0) + 1 : (session?.score || 0));
+
+      // Update participant session score
       await supabase
         .from('participant_sessions')
-        .update({
-          score: newScore,
+        .upsert({
+          register_number: regNum,
+          score: updatedScore,
           last_active_at: nowIso
-        })
-        .eq('register_number', regNum);
+        }, { onConflict: 'register_number' });
+
+      // Keep localStore in sync
+      upsertParticipantSession(regNum, {
+        score: updatedScore,
+        last_active_at: nowIso
+      });
 
       // Broadcast updated score to Admin leaderboard
       await broadcastEvent('admin:live', 'SCORE_UPDATED', {
         register_number: regNum,
-        score: newScore,
-        hints_used: session.hints_used || 0,
-        penalty_seconds: session.penalty_seconds || 0,
+        score: updatedScore,
+        hints_used: session?.hints_used || 0,
+        penalty_seconds: session?.penalty_seconds || 0,
         last_solved_puzzle: puzzle_id,
         recorded_at: nowIso
       });
+    } catch (dbErr) {
+      console.warn('[SUBMISSION DB FALLBACK]', dbErr.message);
+      // Fallback to localStore below if database encounters schema cache issues
     }
-  } else {
-    const session = localStore.participant_sessions.get(regNum);
-    if (session?.is_blocked) {
-      return res.status(403).json({ error: 'fullscreen mode exited. Inform an admin to get unblocked.' });
-    }
+  }
+
+  // Local store execution (or fallback if Supabase errored)
+  const localSess = getParticipantSession(regNum);
+  if (localSess?.is_blocked) {
+    return res.status(403).json({ error: 'fullscreen mode exited. Inform an admin to get unblocked.' });
+  }
+
+  const existingSub = localStore.submissions.find(
+    s => s.register_number.toLowerCase() === regNum.toLowerCase() && s.puzzle_id === puzzle_id
+  );
+
+  if (!existingSub) {
     localStore.submissions.push({
       register_number: regNum,
       puzzle_id,
@@ -88,11 +117,17 @@ export default async function handler(req, res) {
       is_correct: isCorrect,
       recorded_at: nowIso
     });
-    if (isCorrect && session) {
-      session.score = (session.score || 0) + 1;
-      session.last_active_at = nowIso;
-    }
   }
+
+  const localCorrect = localStore.submissions.filter(
+    s => s.register_number.toLowerCase() === regNum.toLowerCase() && s.is_correct
+  ).length;
+
+  upsertParticipantSession(regNum, {
+    score: localCorrect,
+    last_active_at: nowIso
+  });
+  persistStore();
 
   // Strict Rule: UI never reveals correctness during the event
   return res.status(200).json({

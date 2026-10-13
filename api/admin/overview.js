@@ -19,43 +19,101 @@ export default async function handler(req, res) {
   let roster = [];
 
   if (supabase) {
-    // 1. Event State
-    const { data: eState } = await supabase
-      .from('event_state')
-      .select('*')
-      .eq('id', 1)
-      .single();
-    if (eState) eventState = eState;
+    try {
+      // 1. Event State
+      const { data: eState } = await supabase
+        .from('event_state')
+        .select('*')
+        .eq('id', 1)
+        .maybeSingle();
+      if (eState) eventState = eState;
 
-    // 2. Live Leaderboard
-    const { data: board } = await supabase
-      .from('participant_sessions')
-      .select('register_number, score, hints_used, penalty_seconds, accusation_suspect, is_blocked, last_active_at')
-      .order('score', { ascending: false })
-      .order('penalty_seconds', { ascending: true })
-      .order('last_active_at', { ascending: false });
-    if (board) leaderboard = board;
+      // 2. User Roster
+      const { data: users } = await supabase
+        .from('users')
+        .select('register_number, role, created_at')
+        .order('created_at', { ascending: false });
+      if (users && users.length > 0) roster = users;
 
-    // 3. Pending Fullscreen Requests
-    const { data: reqs } = await supabase
-      .from('fullscreen_requests')
-      .select('id, register_number, status, exited_at')
-      .eq('status', 'pending')
-      .order('exited_at', { ascending: false });
-    if (reqs) requests = reqs;
+      // 3. Live Leaderboard
+      const { data: board } = await supabase
+        .from('participant_sessions')
+        .select('register_number, score, hints_used, penalty_seconds, accusation_suspect, is_blocked, last_active_at')
+        .order('score', { ascending: false })
+        .order('penalty_seconds', { ascending: true })
+        .order('last_active_at', { ascending: false });
+      if (board) leaderboard = board;
 
-    // 4. User Roster
-    const { data: users } = await supabase
-      .from('users')
-      .select('register_number, role, created_at')
-      .order('created_at', { ascending: false });
-    if (users) roster = users;
-  } else {
+      // 4. Pending Fullscreen Requests
+      const { data: reqs } = await supabase
+        .from('fullscreen_requests')
+        .select('id, register_number, status, exited_at')
+        .eq('status', 'pending')
+        .order('exited_at', { ascending: false });
+      if (reqs) requests = reqs;
+    } catch (err) {
+      console.warn('[Admin Overview Supabase Warning]', err.message);
+    }
+  }
+
+  // Fallback / merge with localStore
+  if (!eventState.server_start_time && localStore.event_state.is_started) {
     eventState = localStore.event_state;
-    leaderboard = [...localStore.participant_sessions.values()].sort((a,b) => b.score - a.score || a.penalty_seconds - b.penalty_seconds);
-    requests = localStore.fullscreen_requests.filter(r => r.status === 'pending');
+  }
+  if (roster.length === 0) {
     roster = [...localStore.users.values()];
   }
+  if (requests.length === 0) {
+    requests = localStore.fullscreen_requests.filter(r => r.status === 'pending');
+  }
+
+  // Build merged leaderboard: ensure all registered participants appear
+  const boardMap = new Map();
+  for (const b of leaderboard) {
+    boardMap.set(b.register_number.toLowerCase(), { ...b });
+  }
+
+  // Merge localStore participant sessions
+  for (const [k, s] of localStore.participant_sessions.entries()) {
+    const key = (s.register_number || k).toLowerCase();
+    const existing = boardMap.get(key);
+    if (!existing) {
+      boardMap.set(key, { ...s });
+    } else if ((s.score || 0) > (existing.score || 0)) {
+      existing.score = s.score;
+      existing.last_active_at = s.last_active_at || existing.last_active_at;
+    }
+  }
+
+  // Ensure every participant in the roster appears on the leaderboard
+  for (const u of roster) {
+    if (u.role === 'participant') {
+      const key = u.register_number.toLowerCase();
+      if (!boardMap.has(key)) {
+        boardMap.set(key, {
+          register_number: u.register_number,
+          score: 0,
+          hints_used: 0,
+          penalty_seconds: 0,
+          accusation_suspect: null,
+          is_blocked: false,
+          last_active_at: u.created_at || new Date().toISOString()
+        });
+      }
+    }
+  }
+
+  leaderboard = [...boardMap.values()].sort((a, b) => {
+    if ((b.score || 0) !== (a.score || 0)) {
+      return (b.score || 0) - (a.score || 0);
+    }
+    if ((a.penalty_seconds || 0) !== (b.penalty_seconds || 0)) {
+      return (a.penalty_seconds || 0) - (b.penalty_seconds || 0);
+    }
+    const timeA = new Date(a.last_active_at || 0).getTime();
+    const timeB = new Date(b.last_active_at || 0).getTime();
+    return timeB - timeA;
+  });
 
   return res.status(200).json({
     event_state: eventState,

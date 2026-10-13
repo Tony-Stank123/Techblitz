@@ -1,6 +1,6 @@
 // api/auth/login.js
 // Single Login Endpoint: Admin & Participant Verification
-import { supabase, localStore } from '../_lib/db.js';
+import { supabase, localStore, upsertParticipantSession } from '../_lib/db.js';
 import { signToken } from '../_lib/auth.js';
 
 export default async function handler(req, res) {
@@ -17,79 +17,108 @@ export default async function handler(req, res) {
 
   // 1. Check for Default Admin: "Gowtham123"
   const isDefaultAdmin = regNum.toLowerCase() === 'gowtham123';
-  const canonicalRegNum = isDefaultAdmin ? 'Gowtham123' : regNum;
-
+  let canonicalRegNum = isDefaultAdmin ? 'Gowtham123' : regNum;
   let role = isDefaultAdmin ? 'admin' : 'participant';
 
   if (supabase) {
-    // Query database users roster
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('register_number, role')
-      .eq('register_number', canonicalRegNum)
-      .single();
+    try {
+      // Query database users roster case-insensitively
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('register_number, role')
+        .ilike('register_number', canonicalRegNum)
+        .maybeSingle();
 
-    if (error || !user) {
-      if (isDefaultAdmin) {
-        await supabase
-          .from('users')
-          .insert({ register_number: 'Gowtham123', role: 'admin' })
-          .select()
-          .single();
-        role = 'admin';
+      if (error || !user) {
+        if (isDefaultAdmin) {
+          await supabase
+            .from('users')
+            .upsert({ register_number: 'Gowtham123', role: 'admin' }, { onConflict: 'register_number' });
+          role = 'admin';
+        } else {
+          // Check localStore as fallback
+          const localLookup = [...localStore.users.values()].find(
+            u => u.register_number.toLowerCase() === canonicalRegNum.toLowerCase()
+          );
+          if (localLookup) {
+            canonicalRegNum = localLookup.register_number;
+            role = localLookup.role;
+          } else {
+            return res.status(403).json({
+              error: 'Register number not found in event roster. Contact administrator.'
+            });
+          }
+        }
       } else {
+        // Use exact casing from the database
+        canonicalRegNum = user.register_number;
+        role = user.role;
+      }
+
+      if (role === 'participant') {
+        const { data: existingSession } = await supabase
+          .from('participant_sessions')
+          .select('is_blocked')
+          .ilike('register_number', canonicalRegNum)
+          .maybeSingle();
+
+        if (!existingSession) {
+          await supabase
+            .from('participant_sessions')
+            .upsert({
+              register_number: canonicalRegNum,
+              score: 0,
+              hints_used: 0,
+              penalty_seconds: 0,
+              is_blocked: false,
+              last_active_at: new Date().toISOString()
+            }, { onConflict: 'register_number' });
+        } else {
+          await supabase
+            .from('participant_sessions')
+            .update({ last_active_at: new Date().toISOString() })
+            .ilike('register_number', canonicalRegNum);
+        }
+      }
+    } catch (dbErr) {
+      console.warn('[LOGIN DB WARNING]', dbErr.message);
+      const localLookup = [...localStore.users.values()].find(
+        u => u.register_number.toLowerCase() === canonicalRegNum.toLowerCase()
+      );
+      if (!localLookup && !isDefaultAdmin) {
         return res.status(403).json({
           error: 'Register number not found in event roster. Contact administrator.'
         });
       }
-    } else {
-      role = user.role;
-    }
-
-    if (role === 'participant') {
-      const { data: existingSession } = await supabase
-        .from('participant_sessions')
-        .select('is_blocked')
-        .eq('register_number', canonicalRegNum)
-        .single();
-
-      if (!existingSession) {
-        await supabase
-          .from('participant_sessions')
-          .insert({ register_number: canonicalRegNum, score: 0, is_blocked: false });
-      } else {
-        await supabase
-          .from('participant_sessions')
-          .update({ last_active_at: new Date().toISOString() })
-          .eq('register_number', canonicalRegNum);
+      if (localLookup) {
+        canonicalRegNum = localLookup.register_number;
+        role = localLookup.role;
       }
     }
   } else {
     // Local fallback for local dev & testing
-    const lookup = localStore.users.get(canonicalRegNum.toLowerCase());
+    const lookup = [...localStore.users.values()].find(
+      u => u.register_number.toLowerCase() === canonicalRegNum.toLowerCase()
+    );
     if (!lookup && !isDefaultAdmin) {
       return res.status(403).json({
         error: 'Register number not found in event roster. Contact administrator.'
       });
     }
     if (lookup) {
+      canonicalRegNum = lookup.register_number;
       role = lookup.role;
     } else if (isDefaultAdmin) {
       localStore.users.set('gowtham123', { register_number: 'Gowtham123', role: 'admin' });
       role = 'admin';
     }
+  }
 
-    if (role === 'participant' && !localStore.participant_sessions.has(canonicalRegNum)) {
-      localStore.participant_sessions.set(canonicalRegNum, {
-        register_number: canonicalRegNum,
-        score: 0,
-        hints_used: 0,
-        penalty_seconds: 0,
-        accusation_suspect: null,
-        is_blocked: false,
-        last_active_at: new Date().toISOString()
-      });
-    }
+  // Ensure session exists in local store
+  if (role === 'participant') {
+    upsertParticipantSession(canonicalRegNum, {
+      last_active_at: new Date().toISOString()
+    });
   }
 
   // Generate signed JWT session token

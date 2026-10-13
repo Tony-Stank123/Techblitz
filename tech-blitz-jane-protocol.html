@@ -753,7 +753,7 @@ const DATA = {
     { id:'lisbon', name:'Lisbon', line:'Runs the team. Signs off on the case.', portrait:'lisbon', away:"Lisbon is holding the scene until her team reports back." }
   ],
   // Case clock. Each case opens when the previous one's time ends (not when it's submitted).
-  timing: { readingMin:IS_FILE ? 5 : 0, sectionMin:{ cho:15, rigsby:15, 'van-pelt':15, lisbon:20 }, closeOnTimeout:true },
+  timing: { readingMin:IS_FILE ? 5 : 0, sectionMin:{ cho:15, rigsby:15, 'van-pelt':20, lisbon:20 }, closeOnTimeout:true },
   consultant: { name:'Patrick Jane', role:'Consultant to the CBI. This is you.', portrait:'jane' },
   categories: ['Timeline record','Physical evidence','Technical analysis','Witness statement','Written message','Access log','Cross-reference'],
   evidence: [
@@ -2349,7 +2349,10 @@ function renderAdminScores(leaderboard = []){
         <div class="mono muted">LIVE PARTICIPANT RANKINGS</div>
         <h2 class="display" style="font-size:2.4rem;">LEADERBOARD</h2>
       </div>
-      <div class="mono muted" style="font-size:.85rem;">Updates immediately on correct puzzle submissions</div>
+      <div style="display:flex;align-items:center;gap:.8rem;">
+        <button id="admin-refresh-scores-btn" class="btn btn-ghost" style="min-height:34px;padding:.2rem .8rem;font-size:.78rem;cursor:pointer;">&#x21bb; REFRESH SCORES</button>
+        <div class="mono muted" style="font-size:.85rem;">Live sync active &bull; Auto-refreshes every 1.5s</div>
+      </div>
     </div>
     <div style="overflow-x:auto;">
       <table class="admin-table">
@@ -2411,10 +2414,29 @@ function renderAdminRequests(requests = []){
 
 function bindAdmin(){
   document.querySelectorAll('.admin-tab-btn').forEach(b => {
-    b.addEventListener('click', () => {
+    b.addEventListener('click', async () => {
       S.adminTab = b.dataset.tab;
       render();
+      const ov = await API.adminOverview().catch(() => null);
+      if(ov) {
+        S.adminOverview = ov;
+        render();
+      }
     });
+  });
+
+  $('#admin-refresh-scores-btn')?.addEventListener('click', async e => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = 'REFRESHING...';
+    try {
+      const ov = await API.adminOverview();
+      if(ov) S.adminOverview = ov;
+    } catch(err) {
+      void err;
+    } finally {
+      render();
+    }
   });
 
   $('#admin-logout-btn')?.addEventListener('click', () => {
@@ -2702,7 +2724,7 @@ function initRealtime(){
     } catch (err) {
       void err;
     }
-  }, 3000);
+  }, 1500);
 }
 
 /* ============ ROUTER ============ */
