@@ -21,16 +21,26 @@ export default async function handler(req, res) {
   let eStateFetched = false;
   if (supabase) {
     try {
-      // 1. Event State
-      const { data: eState } = await supabase
+      // 1. Event State: check id 1 first, fallback to most recently updated row
+      const { data: eState1 } = await supabase
         .from('event_state')
         .select('*')
-        .order('id', { ascending: true })
-        .limit(1)
+        .eq('id', 1)
         .maybeSingle();
-      if (eState) {
-        eventState = eState;
+      if (eState1) {
+        eventState = eState1;
         eStateFetched = true;
+      } else {
+        const { data: eState } = await supabase
+          .from('event_state')
+          .select('*')
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (eState) {
+          eventState = eState;
+          eStateFetched = true;
+        }
       }
 
       // 2. User Roster

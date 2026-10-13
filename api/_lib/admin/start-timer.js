@@ -21,7 +21,7 @@ export default async function handler(req, res) {
   localStore.event_state.server_start_time = serverStartTime;
 
   if (supabase) {
-    // Authoritatively persist timer start in PostgreSQL
+    // Authoritatively persist timer start in PostgreSQL across all rows
     await supabase
       .from('event_state')
       .update({
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
         total_duration_ms: totalDurationMs,
         updated_at: serverStartTime
       })
-      .gte('id', 0);
+      .not('is_started', 'is', null);
 
     await supabase
       .from('event_state')

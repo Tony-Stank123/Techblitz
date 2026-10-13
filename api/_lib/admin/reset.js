@@ -41,7 +41,7 @@ export default async function handler(req, res) {
   // 2. Database reset (if Supabase is connected)
   if (supabase) {
     try {
-      // Reset event state across all rows and ensure row 1 is upserted clean
+      // 1. Reset event_state across ALL rows
       await supabase
         .from('event_state')
         .update({
@@ -50,31 +50,33 @@ export default async function handler(req, res) {
           scores_revealed: false,
           updated_at: nowIso
         })
-        .gte('id', 0);
+        .not('is_started', 'is', null);
 
+      // Upsert default row 1
       await supabase
         .from('event_state')
         .upsert({
           id: 1,
           is_started: false,
           server_start_time: null,
+          total_duration_ms: 4200000,
           scores_revealed: false,
           updated_at: nowIso
         }, { onConflict: 'id' });
 
-      // Clear all recorded submissions
+      // 2. Clear all recorded submissions
       await supabase
         .from('submissions')
         .delete()
-        .gte('id', 0);
+        .not('puzzle_id', 'is', null);
 
-      // Clear all fullscreen violation requests
+      // 3. Clear all fullscreen violation requests
       await supabase
         .from('fullscreen_requests')
         .delete()
-        .gte('id', 0);
+        .not('status', 'is', null);
 
-      // Reset all participant session metrics (scores, hints, penalty, accusations)
+      // 4. Reset all participant session metrics (scores, hints, penalty, accusations)
       await supabase
         .from('participant_sessions')
         .update({
@@ -85,7 +87,7 @@ export default async function handler(req, res) {
           is_blocked: false,
           last_active_at: nowIso
         })
-        .neq('register_number', '');
+        .not('register_number', 'is', null);
     } catch (dbErr) {
       console.warn('[RESET DB WARNING]', dbErr.message);
     }
