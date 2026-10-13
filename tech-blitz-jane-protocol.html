@@ -1225,7 +1225,7 @@ const API = {
       if (endpoint.startsWith('/api/fullscreen')) {
         return { success: true };
       }
-      if (endpoint.startsWith('/api/admin/reset')) {
+      if (IS_FILE && endpoint.startsWith('/api/admin/reset')) {
         return { success: true };
       }
       throw err;
@@ -1294,11 +1294,18 @@ const API = {
       body: JSON.stringify({ revealed })
     });
   },
-  adminResetEvent() {
-    return this.request('/api/admin/reset-event', {
-      method: 'POST',
-      body: JSON.stringify({})
-    });
+  async adminResetEvent() {
+    try {
+      return await this.request('/api/admin/reset-event', {
+        method: 'POST',
+        body: JSON.stringify({})
+      });
+    } catch (err) {
+      return await this.request('/api/admin/reset', {
+        method: 'POST',
+        body: JSON.stringify({})
+      });
+    }
   }
 };
 
@@ -2331,7 +2338,7 @@ function renderAdminControl(es, roster = []){
       <div class="mono muted">EVENT CLOCK STATUS</div>
       <h2 class="display" id="admin-event-status-h2" style="font-size:2.4rem;margin:.5rem 0 .8rem;">${isEventExpired() ? '<span style="color:var(--amber);">INVESTIGATION CONCLUDED</span>' : isStarted ? '<span style="color:var(--steel-ink);">INVESTIGATION RUNNING</span>' : '<span style="color:var(--amber);">AWAITING COMMENCEMENT</span>'}</h2>
       ${isStarted ? `
-        <div style="background:rgba(0,0,0,.35);border:1px solid var(--line);padding:1.2rem;margin:1rem 0;border-radius:4px;">
+        <div id="admin-clock-running-box" style="background:rgba(0,0,0,.35);border:1px solid var(--line);padding:1.2rem;margin:1rem 0;border-radius:4px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:1rem;">
             <div>
               <div class="mono muted" style="font-size:.78rem;letter-spacing:.05em;">ACTIVE PHASE: <span data-live-phase-label>${esc(clockState().label).toUpperCase()}</span></div>
@@ -2352,7 +2359,7 @@ function renderAdminControl(es, roster = []){
           <div class="mono muted" data-live-phase-msg style="font-size:.8rem;margin-top:.6rem;">${esc(clockState().msg)}</div>
         </div>
       ` : ''}
-      <p style="color:var(--slate);font-size:.9rem;line-height:1.6;margin-top:.8rem;">
+      <p id="admin-clock-desc" style="color:var(--slate);font-size:.9rem;line-height:1.6;margin-top:.8rem;">
         ${isStarted
           ? `Authoritative start timestamp: <strong class="mono" style="color:var(--paper);">${clock(es.server_start_time || S.serverStartTime)}</strong><br>Timer is synchronized across all participants.`
           : `Clicking Start Timer will immediately engage fullscreen mode and unlock case briefing across all 50 participant screens simultaneously.`}
@@ -2363,6 +2370,9 @@ function renderAdminControl(es, roster = []){
         </button>
         <button class="btn ${areScoresRevealed() ? 'btn-red' : 'btn-ghost'}" id="admin-reveal-scores-btn" style="width:100%;justify-content:center;color:var(--amber);border-color:var(--amber);">
           ${areScoresRevealed() ? 'SCORES REVEALED TO PARTICIPANTS (UNSEALED)' : 'REVEAL SCORES &amp; SOLUTION FOR ALL PARTICIPANTS'}
+        </button>
+        <button class="btn btn-ghost" id="admin-download-json-btn" style="width:100%;justify-content:center;color:var(--steel-ink);border-color:var(--steel-ink);">
+          &#x2913; DOWNLOAD JSON
         </button>
         <button class="btn btn-ghost" id="admin-reset-event-btn" style="width:100%;justify-content:center;color:var(--red);border-color:var(--red);">
           &#x21ba; RESET ENTIRE EVENT (PRESERVES USERS &amp; ADMINS)
@@ -2426,7 +2436,8 @@ function renderAdminScores(leaderboard = []){
         <div class="mono muted">LIVE PARTICIPANT RANKINGS</div>
         <h2 class="display" style="font-size:2.4rem;">LEADERBOARD</h2>
       </div>
-      <div style="display:flex;align-items:center;gap:.8rem;">
+      <div style="display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;">
+        <button id="admin-download-json-scores-btn" class="btn btn-ghost" style="min-height:34px;padding:.2rem .8rem;font-size:.78rem;cursor:pointer;color:var(--amber);border-color:var(--amber);">&#x2913; DOWNLOAD JSON</button>
         <button id="admin-refresh-scores-btn" class="btn btn-ghost" style="min-height:34px;padding:.2rem .8rem;font-size:.78rem;cursor:pointer;">&#x21bb; REFRESH SCORES</button>
         <div class="mono muted" style="font-size:.85rem;">Live sync active &bull; Auto-refreshes every 1.5s</div>
       </div>
@@ -2574,10 +2585,10 @@ function updateAdminLiveElements(ov){
     revBtn.textContent = rev ? 'SCORES REVEALED TO PARTICIPANTS (UNSEALED)' : 'REVEAL SCORES & SOLUTION FOR ALL PARTICIPANTS';
   }
 
-  // 5. Timer Start Button
+  // 5. Timer Start Button & Clock Card Elements
+  const isStarted = Boolean(es.is_started || S.eventStarted);
   const startBtn = document.getElementById('admin-start-timer-btn');
   if(startBtn){
-    const isStarted = es.is_started || S.eventStarted;
     startBtn.disabled = isStarted;
     startBtn.textContent = isStarted ? 'TIMER CURRENTLY ACTIVE' : 'START TIMER FOR ALL PARTICIPANTS';
   }
@@ -2585,12 +2596,77 @@ function updateAdminLiveElements(ov){
   // 6. Header Status
   const statusH2 = document.getElementById('admin-event-status-h2');
   if(statusH2){
-    const isStarted = es.is_started || S.eventStarted;
     statusH2.innerHTML = isEventExpired() ? '<span style="color:var(--amber);">INVESTIGATION CONCLUDED</span>' : isStarted ? '<span style="color:var(--steel-ink);">INVESTIGATION RUNNING</span>' : '<span style="color:var(--amber);">AWAITING COMMENCEMENT</span>';
+  }
+
+  // 7. Clock Running Box & Desc
+  const clockBox = document.getElementById('admin-clock-running-box');
+  if(clockBox){
+    clockBox.style.display = isStarted ? '' : 'none';
+  }
+  const clockDesc = document.getElementById('admin-clock-desc');
+  if(clockDesc){
+    clockDesc.innerHTML = isStarted
+      ? `Authoritative start timestamp: <strong class="mono" style="color:var(--paper);">${clock(es.server_start_time || S.serverStartTime)}</strong><br>Timer is synchronized across all participants.`
+      : `Clicking Start Timer will immediately engage fullscreen mode and unlock case briefing across all 50 participant screens simultaneously.`;
   }
 }
 
+async function downloadLeaderboardJson(){
+  let ov = S.adminOverview;
+  try {
+    const fresh = await API.adminOverview();
+    if(fresh){
+      S.adminOverview = fresh;
+      ov = fresh;
+    }
+  } catch(e) {
+    void e;
+  }
+  const board = ov?.leaderboard || [];
+  const exportData = {
+    event: 'TECH BLITZ: The Jane Protocol',
+    exported_at: new Date().toISOString(),
+    total_participants: board.length,
+    scores_revealed: areScoresRevealed(),
+    event_status: isEventExpired() ? 'CONCLUDED' : ((ov?.event_state?.is_started || S.eventStarted) ? 'RUNNING' : 'AWAITING_COMMENCEMENT'),
+    results: board.map((p, idx) => {
+      const suspectObj = p.accusation_suspect ? sus(p.accusation_suspect) : null;
+      return {
+        rank: idx + 1,
+        register_number: p.register_number,
+        score: p.score || 0,
+        max_score: 8,
+        hints_used: p.hints_used || 0,
+        penalty_seconds: p.penalty_seconds || 0,
+        accusation_suspect_id: p.accusation_suspect || null,
+        accusation_suspect_name: suspectObj?.name || p.accusation_suspect || null,
+        accusation_correct: p.accusation_suspect ? (p.accusation_suspect.toLowerCase() === 'sam' || p.accusation_suspect.toLowerCase() === 'whitley') : false,
+        is_blocked: Boolean(p.is_blocked),
+        last_active_at: p.last_active_at || null
+      };
+    })
+  };
+
+  const str = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([str], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.download = `techblitz-results-${dateStr}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
+}
+
 function bindAdmin(){
+  $('#admin-download-json-btn')?.addEventListener('click', downloadLeaderboardJson);
+  $('#admin-download-json-scores-btn')?.addEventListener('click', downloadLeaderboardJson);
+
   document.querySelectorAll('.admin-tab-btn').forEach(b => {
     b.addEventListener('click', async () => {
       S.adminTab = b.dataset.tab;
@@ -2661,12 +2737,18 @@ function bindAdmin(){
         S.adminOverview.event_state.server_start_time = null;
         S.adminOverview.event_state.scores_revealed = false;
       }
-      alert('Event has been successfully reset. All submissions cleared; roster preserved.');
       const ov = await API.adminOverview().catch(() => null);
       if (ov) {
         S.adminOverview = ov;
+        if (ov.event_state) {
+          S.eventStarted = Boolean(ov.event_state.is_started);
+          S.serverStartTime = ov.event_state.server_start_time ? new Date(ov.event_state.server_start_time).getTime() : null;
+          S.t0 = S.serverStartTime;
+          S.scoresRevealed = Boolean(ov.event_state.scores_revealed);
+        }
       }
       render();
+      alert('Event has been successfully reset. All participant submissions cleared; Start Timer is unlocked and ready.');
     } catch (err) {
       alert('Error resetting event: ' + err.message);
       btn.disabled = false;
@@ -2966,7 +3048,7 @@ function initRealtime(){
             S.eventStarted = true;
             S.serverStartTime = new Date(ov.event_state.server_start_time).getTime();
             S.t0 = S.serverStartTime;
-          } else if(!ov.event_state?.is_started && S.eventStarted){
+          } else if(!ov.event_state?.is_started){
             S.eventStarted = false;
             S.serverStartTime = null;
             S.t0 = null;

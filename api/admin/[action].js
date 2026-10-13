@@ -11,18 +11,47 @@ import resetHandler from '../_lib/admin/reset.js';
 const handlers = {
   'overview': overviewHandler,
   'start-timer': startTimerHandler,
+  'start': startTimerHandler,
+  'timer': startTimerHandler,
   'add-user': addUserHandler,
+  'adduser': addUserHandler,
   'remove-user': removeUserHandler,
+  'removeuser': removeUserHandler,
   'unblock': unblockHandler,
   'reveal-scores': revealScoresHandler,
+  'reveal': revealScoresHandler,
   'reset': resetHandler,
-  'reset-event': resetHandler
+  'reset-event': resetHandler,
+  'resetevent': resetHandler,
+  'download': overviewHandler,
+  'export': overviewHandler
 };
 
 export default async function handler(req, res) {
-  const urlObj = req.url ? new URL(req.url, 'http://localhost') : null;
-  const pathAction = urlObj ? urlObj.pathname.split('/').filter(Boolean).pop() : '';
-  const action = req.query?.action || pathAction;
+  let action = '';
+  if (req.query?.action) {
+    action = Array.isArray(req.query.action) ? req.query.action[0] : req.query.action;
+  }
+
+  if (!action || action === '[action]') {
+    try {
+      const urlObj = new URL(req.url, 'http://localhost');
+      action = urlObj.searchParams.get('action');
+      if (!action || action === '[action]') {
+        const parts = urlObj.pathname.split('/').filter(Boolean);
+        const last = parts.pop();
+        if (last && last !== '[action]') {
+          action = last;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (action) {
+    action = String(action).replace(/\.js$/, '').toLowerCase().trim();
+  }
 
   const fn = handlers[action];
   if (!fn) {

@@ -18,15 +18,20 @@ export default async function handler(req, res) {
   let requests = [];
   let roster = [];
 
+  let eStateFetched = false;
   if (supabase) {
     try {
       // 1. Event State
       const { data: eState } = await supabase
         .from('event_state')
         .select('*')
-        .eq('id', 1)
+        .order('id', { ascending: true })
+        .limit(1)
         .maybeSingle();
-      if (eState) eventState = eState;
+      if (eState) {
+        eventState = eState;
+        eStateFetched = true;
+      }
 
       // 2. User Roster
       const { data: users } = await supabase
@@ -77,10 +82,8 @@ export default async function handler(req, res) {
   }
 
   // Fallback / merge with localStore
-  if (!supabase) {
+  if (!supabase || !eStateFetched) {
     eventState = { ...localStore.event_state };
-  } else if (!eventState.server_start_time && localStore.event_state.is_started) {
-    eventState = localStore.event_state;
   }
   if (roster.length === 0) {
     roster = [...localStore.users.values()];

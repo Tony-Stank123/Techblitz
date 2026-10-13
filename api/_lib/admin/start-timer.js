@@ -17,9 +17,12 @@ export default async function handler(req, res) {
   const serverStartTime = new Date().toISOString();
   const totalDurationMs = 4200000; // 70 minutes
 
+  localStore.event_state.is_started = true;
+  localStore.event_state.server_start_time = serverStartTime;
+
   if (supabase) {
     // Authoritatively persist timer start in PostgreSQL
-    const { error } = await supabase
+    await supabase
       .from('event_state')
       .update({
         is_started: true,
@@ -27,14 +30,17 @@ export default async function handler(req, res) {
         total_duration_ms: totalDurationMs,
         updated_at: serverStartTime
       })
-      .eq('id', 1);
+      .gte('id', 0);
 
-    if (error) {
-      return res.status(500).json({ error: 'Failed to record timer start in database' });
-    }
-  } else {
-    localStore.event_state.is_started = true;
-    localStore.event_state.server_start_time = serverStartTime;
+    await supabase
+      .from('event_state')
+      .upsert({
+        id: 1,
+        is_started: true,
+        server_start_time: serverStartTime,
+        total_duration_ms: totalDurationMs,
+        updated_at: serverStartTime
+      }, { onConflict: 'id' });
   }
 
   // Broadcast timer start event to all connected participant browsers in real-time

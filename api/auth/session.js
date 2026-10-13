@@ -21,17 +21,20 @@ export default async function handler(req, res) {
   let accusation = null;
   let eventState = { is_started: false, server_start_time: null, total_duration_ms: 4200000, scores_revealed: false };
 
+  let eStateFetched = false;
   if (supabase) {
     try {
       // 1. Fetch Event State
       const { data: eState } = await supabase
         .from('event_state')
         .select('is_started, server_start_time, total_duration_ms, scores_revealed')
-        .eq('id', 1)
+        .order('id', { ascending: true })
+        .limit(1)
         .maybeSingle();
 
       if (eState) {
         eventState = eState;
+        eStateFetched = true;
       }
 
       // 2. Fetch Participant Session & State (if participant)
@@ -68,10 +71,8 @@ export default async function handler(req, res) {
   }
 
   // Fallback to localStore
-  if (!supabase) {
+  if (!supabase || !eStateFetched) {
     eventState = { ...localStore.event_state };
-  } else if (!eventState.server_start_time && localStore.event_state.is_started) {
-    eventState = localStore.event_state;
   }
   if (user.role === 'participant') {
     const localSess = getParticipantSession(user.register_number);

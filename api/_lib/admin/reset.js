@@ -41,7 +41,7 @@ export default async function handler(req, res) {
   // 2. Database reset (if Supabase is connected)
   if (supabase) {
     try {
-      // Reset event state
+      // Reset event state across all rows and ensure row 1 is upserted clean
       await supabase
         .from('event_state')
         .update({
@@ -50,19 +50,29 @@ export default async function handler(req, res) {
           scores_revealed: false,
           updated_at: nowIso
         })
-        .eq('id', 1);
+        .gte('id', 0);
+
+      await supabase
+        .from('event_state')
+        .upsert({
+          id: 1,
+          is_started: false,
+          server_start_time: null,
+          scores_revealed: false,
+          updated_at: nowIso
+        }, { onConflict: 'id' });
 
       // Clear all recorded submissions
       await supabase
         .from('submissions')
         .delete()
-        .neq('id', 0);
+        .gte('id', 0);
 
       // Clear all fullscreen violation requests
       await supabase
         .from('fullscreen_requests')
         .delete()
-        .neq('id', 0);
+        .gte('id', 0);
 
       // Reset all participant session metrics (scores, hints, penalty, accusations)
       await supabase
