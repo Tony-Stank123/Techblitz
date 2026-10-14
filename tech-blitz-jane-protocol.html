@@ -1413,15 +1413,15 @@ const isEventExpired = (eventState) => {
 const areScoresRevealed = () => {
   return Boolean(S.scoresRevealed || S.adminOverview?.event_state?.scores_revealed || isEventExpired());
 };
-const detUnlocked = id => { const w = win(id); return !!w && now() >= w.open; };
-const detClosed = id => { const w = win(id); return !!w && (isEventExpired() || (DATA.timing.closeOnTimeout && now() >= w.close)); };
-const detDone = id => chOf(id).every(p => S.subs[p.id]) || detClosed(id);
-const sectionsDone = () => isEventExpired() || DATA.detectives.every(d => detDone(d.id));
-const pstatus = p => S.subs[p.id] ? 'submitted' : isEventExpired() ? 'expired' : !detUnlocked(detOf(p)) ? 'away' : detClosed(detOf(p)) ? 'expired' : (p.requires && !S.subs[p.requires]) ? 'locked' : 'available';
+const detUnlocked = id => true;
+const detClosed = id => false;
+const detDone = id => chOf(id).every(p => S.subs[p.id]);
+const sectionsDone = () => DATA.detectives.every(d => detDone(d.id));
+const pstatus = p => S.subs[p.id] ? 'submitted' : (p.requires && !S.subs[p.requires]) ? 'locked' : 'available';
 const fmtMs = ms => { const x = Math.max(0, Math.ceil(ms / 1000)); return pad(Math.floor(x / 60)) + ':' + pad(x % 60); };
 const until = ts => `<span class="cd" data-until="${ts}">${fmtMs(ts - now())}</span>`;
 const hhmm = ts => new Date(ts).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
-const STATUS = { available:['available','Open'], locked:['locked','Locked'], away:['locked','In the field'], expired:['locked',"Time's up"], submitted:['completed','Answer recorded'] };
+const STATUS = { available:['available','Open'], locked:['locked','Locked'], away:['available','Open'], expired:['locked',"Time's up"], submitted:['completed','Answer recorded'] };
 const statusChip = s => `<span class="status st-${STATUS[s][0]}">${STATUS[s][1]}</span>`;
 const completed = () => PUZZLES.filter(p => S.subs[p.id]).length;
 const STEPS = [
@@ -1446,40 +1446,12 @@ function fieldCard(d, size=''){
   </div>`;
 }
 function clockState(){
-  const ws = windows(), t = now();
-  const es = S.adminOverview?.event_state;
-  const isStarted = Boolean(es?.is_started || S.eventStarted);
-  const pausedMs = S.pausedElapsedMs != null ? S.pausedElapsedMs : (es?.paused_elapsed_ms != null ? es.paused_elapsed_ms : null);
-  const isPaused = !isStarted && pausedMs != null && !isEventExpired();
-
-  if(!ws) return { label: isPaused ? 'Case clock (PAUSED)' : 'Case clock', msg: isPaused ? 'Investigation is paused at reset point.' : 'Starts when you open 01 Case briefing.' };
-  if(sectionsDone()) return { label:'Case clock', msg:'All four cases are closed.' };
-  if(t < ws[0].open) return {
-    label: isPaused ? 'Reading time (PAUSED)' : 'Reading time',
-    from: S.t0 || (now() - (pausedMs || 0)),
-    ts: ws[0].open,
-    msg: isPaused ? 'Timer paused at reset point. Awaiting commencement.' : "Cho's case opens when this ends."
-  };
-  const cur = ws.find(w => t >= w.open && t < w.close);
-  if(!cur) return { label:'Case clock', msg:'All four cases are closed.' };
-  const d = det(cur.id), nd = DATA.detectives[detIndex(cur.id)+1], done = chOf(cur.id).every(p => S.subs[p.id]);
-  return {
-    label: isPaused ? `${d.name}'s case (PAUSED)` : `${d.name}'s case`,
-    from: cur.open,
-    ts: cur.close,
-    msg: isPaused ? 'Timer paused at reset point. Awaiting start by administrator.' : (done ? (nd ? `Submitted. ${nd.name} arrives when this ends.` : 'Submitted.') : (nd ? `Closes when this ends, and ${nd.name} arrives.` : 'Closes when this ends.'))
-  };
+  return { label: 'Untimed Mode', msg: 'All case files are unlocked.' };
 }
 function timerBlock(){
-  const c = clockState();
-  return `<div class="timer" role="timer" aria-label="${esc(c.label)}"><span class="mono muted" data-live-phase-label>${c.label}</span>
-    ${c.ts ? `<div class="clock"><span class="cd" data-live-phase data-until="${c.ts}">${fmtMs(c.ts - now())}</span></div><div class="meter"><i data-meter-from="${c.from}" data-meter-to="${c.ts}" style="width:${Math.max(0,(c.ts-now())/(c.ts-c.from)*100)}%"></i></div>` : ''}
-    <p class="tb-msg" data-live-phase-msg>${c.msg}</p></div>`;
+  return '';
 }
 function readingBanner(){
-  const ws = windows(); if(!ws) return '';
-  if(now() < ws[0].open) return `<div class="reading" role="timer"><div><span class="mono muted">Reading time</span><strong>${until(ws[0].open)}</strong></div><p>Read the briefing, the evidence and the suspects. Cho's case opens when this ends.</p></div>`;
-  if(now() < ws[0].close && !detDone('cho')) return `<div class="reading done"><p>Reading time is over. Cho's case is open.</p><a class="btn" href="#/investigation/cho">Go to Cho's case</a></div>`;
   return '';
 }
 function verdictPanel(){
@@ -1730,10 +1702,10 @@ function detectivePage(id){
             <div class="mono" style="color:var(--green-ink);font-weight:600;">AGENT ${d.name.toUpperCase()} // INQUIRY COMPLETED</div>
             <h3 class="display" style="font-size:2.2rem;margin:.4rem 0 .8rem;">All answers filed for ${d.name}.</h3>
             <p style="color:var(--paper);line-height:1.6;font-size:1.05rem;">
-              ${nextDet ? `You must now wait until ${d.name}'s designated timer window runs out before ${nextDet.name} unlocks.<br>Next agent (<strong style="color:var(--amber);">${nextDet.name}</strong>) unlocks in: <strong class="mono" style="font-size:1.2rem;color:var(--amber);">${until(win(nextDet.id).open)}</strong>` : 'All four field investigations are closed! You can now proceed to the Final Deduction.'}
+              ${nextDet ? `You can now proceed to ${nextDet.name}'s case.` : 'All four field investigations are closed! You can now proceed to the Final Deduction.'}
             </p>
             <div class="actions" style="margin-top:1.5rem;">
-              ${nextDet ? `<a class="btn btn-ghost" href="#/investigation">&larr; Return to Investigation Roster</a>` : `<a class="btn btn-red" href="#/final-deduction">Proceed to Final Deduction &rarr;</a>`}
+              ${nextDet ? `<a class="btn btn-red" href="#/investigation/${nextDet.id}">Proceed to ${nextDet.name}'s case &rarr;</a>` : `<a class="btn btn-red" href="#/final-deduction">Proceed to Final Deduction &rarr;</a>`}
             </div>
           </div>
         ` : ''}
@@ -1748,7 +1720,7 @@ function detectivePage(id){
     <div>
       <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
         <h1 class="display" style="font-size:clamp(3.6rem,8vw,7rem);margin:0;">${d.name}</h1>
-        ${isUnlocked && w ? `<span class="badge badge-active mono" style="font-size:.85rem;">Closes in ${until(w.close)}</span>` : ''}
+        <span class="badge badge-active mono" style="font-size:.85rem;">Case Open</span>
       </div>
       <p style="color:#C9C7C1;font-size:1.1rem;margin-top:.6rem;">${d.line}</p>
       ${list[0] ? `<p class="mono muted" style="margin:0">${esc(list[0].case)}</p>` : ''}
@@ -1913,8 +1885,7 @@ function nextAction(p, next){
   if(sectionsDone()) return verdictPanel();
   const d = det(detOf(p)), nd = DATA.detectives[detIndex(d.id)+1];
   if(nd && chOf(d.id).every(x => S.subs[x.id])){
-    if(detUnlocked(nd.id)) return act(`<a class="btn btn-red" href="#/investigation/${nd.id}">${nd.name} is back. Open ${nd.name}'s case</a>`);
-    return `<p class="wait">${d.name}'s case is in. ${nd.name} is back in ${until(win(nd.id).open)}. Use the time to look over the <a class="link" href="#/evidence">evidence</a> and the <a class="link" href="#/suspects">suspects</a>.</p>`;
+    return act(`<a class="btn btn-red" href="#/investigation/${nd.id}">Open ${nd.name}'s case &rarr;</a>`);
   }
   return act(`<a class="btn btn-ghost" href="#/investigation">Back to the investigation</a>`);
 }
@@ -1924,10 +1895,8 @@ function hintPanel(p, sub, isDesk = false){
   const hintId = isDesk ? `hint-${p.id}` : 'hint';
   if(h) return `<div class="hintbox"><h3>Hint requested</h3><p>Logged at <span class="mono">${clock(h.recorded_at)}</span> with a 60-second penalty. In the live event the hint text appears here, sent by the server.</p></div>`;
   if(sub) return '';
-  const at = S.opened[p.id] + HINT_DELAY_MS, ready = now() >= at;
-  const when = new Date(at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
-  return `<div class="hintbox"><h3>Hint</h3><p>One hint for this part. ${ready ? '' : `Available from ${when}. `}Using it adds 60 seconds to your time.</p>
-    <button class="btn btn-ghost" id="${hintId}" data-pid="${p.id}" ${ready ? '' : 'disabled'}>Request hint</button></div>`;
+  return `<div class="hintbox"><h3>Hint</h3><p>One hint for this part. Using it adds 60 seconds to your penalty time.</p>
+    <button class="btn btn-ghost" id="${hintId}" data-pid="${p.id}">Request hint</button></div>`;
 }
 function workspace(id){
   const p = PUZZLES.find(x => x.id === id); if(!p) return notFound();
@@ -1938,7 +1907,7 @@ function workspace(id){
     const prev = DATA.detectives[detIndex(d.id)-1];
     main = fieldCard(d, 'big') + `<div class="actions">${prev ? `<a class="btn" href="#/investigation/${prev.id}">Go to ${prev.name}'s case</a>` : `<a class="btn" href="#/briefing">Read the case briefing</a>`}</div>`;
   } else if(s === 'expired'){
-    main = `<div class="feedback fb-locked fb-neutral" role="status"><span class="glyph" aria-hidden="true">⌀</span><div><h3>Time's up</h3><p>${d.name}'s case closed at ${hhmm(win(d.id).close)} before this part was submitted.</p></div></div>
+    main = `<div class="feedback fb-locked fb-neutral" role="status"><span class="glyph" aria-hidden="true">⌀</span><div><h3>Time's up</h3><p>${d.name}'s case is closed.</p></div></div>
       ${nextAction(p, null)}`;
   } else if(s === 'locked'){
     const req = PUZZLES.find(x => x.id === p.requires);
@@ -1963,7 +1932,7 @@ function workspace(id){
       <ol>${DATA.detectives.filter(x => x.id !== d.id).map(x => `<li><a href="#/investigation/${x.id}"><span class="n">${x.name[0]}</span><span>${x.name}</span></a></li>`).join('')}</ol>
     </nav>
     <section class="ws-center" aria-labelledby="ws-title">
-      <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap"><span class="mono muted">Question ${pad(idx(p))} of ${PUZZLES.length}</span><span class="mono muted">${esc(p.case)}</span>${(s==='available'||s==='locked') && win(d.id) ? `<span class="mono sec-cd">Case closes in ${until(win(d.id).close)}</span>` : ''}</div>
+      <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap"><span class="mono muted">Question ${pad(idx(p))} of ${PUZZLES.length}</span><span class="mono muted">${esc(p.case)}</span></div>
       <h1 id="ws-title">${d.name}, ${p.title}</h1>
       ${main}
     </section>

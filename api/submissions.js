@@ -24,15 +24,7 @@ export default async function handler(req, res) {
 
   const nowIso = new Date().toISOString();
 
-  // 0. Enforce authoritative event clock: close quiz when time expires
-  const es = localStore.event_state;
-  if (es?.is_started && es.server_start_time) {
-    const elapsed = Date.now() - new Date(es.server_start_time).getTime();
-    const maxDuration = (es.total_duration_ms || 4200000) + 15000; // 15s grace for network
-    if (elapsed > maxDuration) {
-      return res.status(403).json({ error: 'Investigation time limit has ended. Submissions are closed.' });
-    }
-  }
+  // Submissions allowed at any time in untimed mode
 
   // 1. Authoritative correctness evaluation server-side
   const isCorrect = checkAnswer(puzzle_id, submitted_answer);
